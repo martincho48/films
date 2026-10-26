@@ -48,23 +48,28 @@ GitHub push ──► GitHub Actions ──► build image ──► deploy na C
   - Za běhu má každá část vlastní service account s minimálními právy: `films-scraper` (secret TMDB, zápis do bucketu) a `films-app` (čtení z BigQuery, Vertex AI). Aplikace k TMDB tokenu přístup nemá.
 - **Strategie scrapingu: každý měsíc plné stažení katalogu.** S filtry a oříznutím vychází zhruba 12 kB na film, takže plné stažení je levné a jednodušší než přírůstky. Smazané filmy, opravy chyb i změny nastavení se projeví samy.
   - **Filtry přímo v API** (`/discover/movie`): `include_adult=false`, `include_video=false`, `with_runtime.gte=40` (oficiální hranice celovečerního filmu podle AMPAS a BFI; vyřadí i filmy s neznámou délkou) a `with_origin_country` podle seznamu zemí. Stahují se **všechny filmy** z vybraných zemí bez prahu `vote_count`. Méně známé filmy se filtrují až v BigQuery nebo v aplikaci podle `vote_count`. Katalog se prochází po zemích a letech (TMDB vrací nejvýš 500 stránek, tedy 10 000 filmů na dotaz). Rok, který se do limitu nevejde, se dělí na měsíce. Duplicity se sloučí podle `id`. Jazyk se nefiltruje, `original_language` zůstává jako sloupec.
-  - **Výchozí seznam zemí (27):** `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP, CN, HK, IN`. Dá se kdykoli změnit a další měsíční běh se tomu přizpůsobí.
+  - **Výchozí seznam zemí (26):** `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP, CN, HK, IN`. Dá se kdykoli změnit a další měsíční běh se tomu přizpůsobí.
   - **Všechny parametry jsou v `scraper/config.toml`** (v repu, s komentáři), rozdělené na `[discover]` (které filmy), `[trim]` (co z filmu uložit) a `[output]` (jak ukládat). Změna = úprava souboru a nové nasazení jobu. Celá konfigurace se kopíruje do `manifest.json` každého běhu. Pro jednorázové testy jde parametr přepsat proměnnou prostředí (například `COUNTRIES=CZ`).
   - **Oříznutí `credits` už ve scraperu**, všechno ostatní zůstane, jak to TMDB vrátilo: cast prvních 20 herců podle `order`, crew jen klíčové role (Director, Writer, Screenplay, Novel, Story, Producer, Executive Producer, Director of Photography, Original Music Composer, Editor, Casting) se všemi lidmi v roli. Pravidla oříznutí se zapisují do `manifest.json` každého běhu.
   - **Scraper je nezávislý na BigQuery.** Jen stahuje do GCS a nic nečte ani nezapisuje do BigQuery.
 - **Raw bucket: každý běh má vlastní složku a ukládá se po částech.**
   ```
-  raw/tmdb/dt=YYYY-MM-DD/run_…/
+  raw/tmdb/dt=YYYY-MM-DD/run=YYYY-MM-DDTHH-MM-SSZ/
       lists/part-0001.jsonl      # surové stránky seznamů
       details/part-0001.jsonl    # max. 1 000 filmů na část, nahrává se průběžně
       manifest.json              # zapisuje se jako poslední = běh je úplný
   ```
+  Složky ve tvaru `klíč=hodnota` čte BigQuery automaticky jako sloupce `dt` a `run` (hive partitioning). Každý řádek detailu má navíc pole `_fetched_at` (čas stažení). Podtržítko označuje pole přidané scraperem, ne TMDB.
   **Formát raw je JSONL, ne Parquet.** Je to přesná kopie odpovědi TMDB, nové nebo prázdné pole nezpůsobí konflikt schémat mezi částmi a scraper nepotřebuje `pyarrow`. Sloupcové uložení zajistí až nativní tabulky BigQuery. Pokud by objem dat byl větší, než se čeká, zapne se gzip (`.jsonl.gz`), který BigQuery čte přímo.
 
   Lifecycle pravidlo bucketu maže soubory starší než 160 dní, takže zůstává zhruba posledních 5 měsíčních běhů. Mazání řídí GCP, job nepotřebuje právo mazat.
 - **Načítání do BigQuery čistě přes SQL.** External table nad raw bucketem a Scheduled Query jednou měsíčně (po scraperu) vezme poslední úplný běh (s `manifest.json`), vyčistí ho a:
-  - `MERGE` do `movies`: 1 řádek na film, aktuální stav. Filmy, které v běhu chybí (například z odebrané země), dostanou `in_catalog = FALSE` a nemažou se.
-  - `INSERT` do `movie_metrics_history`: `vote_average`, `vote_count` a `popularity` za každý běh, aby historie metrik přežila mazání raw.
+  - `MERGE` do `movies`: 1 řádek na film, aktuální stav (tabulka roste jen s počtem filmů, ne s počtem běhů). Filmy, které v běhu chybí (například z odebrané země), dostanou `in_catalog = FALSE` a nemažou se. Časové sloupce:
+    - `first_seen_at`: první běh, ve kterém se film objevil. Nastaví se jednou a `MERGE` ho nikdy nepřepíše, takže „novinky v měsíci“ jdou filtrovat kdykoli zpětně. V prvním běhu ho dostanou všechny existující filmy, takže smysluplné novinky jsou až od druhého běhu.
+    - `last_seen_at`: poslední běh, ve kterém film byl.
+    - `updated_at`: kdy `MERGE` řádek naposledy změnil.
+  - `INSERT` do `movie_snapshots`: 1 řádek na film a běh (`id, run_date, status, release_date, vote_average, vote_count, popularity, in_catalog`). Slouží pro historii metrik, změny stavu (`Post Production` → `Released`) a posuny premiér. Je to kolem 120 tisíc malých řádků ročně při 10 000 filmech.
+  - **`movie_snapshots` se nikdy nemaže ani nepřestavuje z raw.** Je to trvalý záznam historie, protože raw drží jen ~5 měsíců. Kdyby se `movies` přestavovala, `first_seen_at` se dopočítá jako `MIN(run_date)` ze snapshotů.
   - Opakované spuštění nic nerozbije, protože `MERGE` je idempotentní.
 
 ## Roadmap
@@ -74,12 +79,12 @@ GitHub push ──► GitHub Actions ──► build image ──► deploy na C
   - [x] Secret, bucket a service account (krok 1.1)
   - [x] Vzorový scraping jako Cloud Run Job (krok 1.2)
   - [x] EDA surových dat (krok 1.3)
-  - [ ] Přepis scraperu podle strategie a test na jednom roce `CZ`
-  - [ ] Ostrý běh na `CZ` (skutečný objem a doba běhu)
-  - [ ] Plný běh pro všech 27 zemí
+  - [x] Přepis scraperu podle strategie a test na jednom roce `CZ` (krok 1.4)
+  - [x] Ostrý běh na `CZ` (krok 1.4)
+  - [ ] Plný běh pro všech 26 zemí
   - [ ] Lifecycle pravidlo bucketu (160 dní)
   - [ ] BigQuery: dataset `films`, external table, SQL pro cleaning
-  - [ ] BigQuery: `movies` (`MERGE`) a `movie_metrics_history` (`INSERT`)
+  - [ ] BigQuery: `movies` (`MERGE`) a `movie_snapshots` (`INSERT`)
   - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
   - [ ] Budget alert
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
@@ -273,3 +278,34 @@ Hlavní zjištění ze vzorku 31 filmů:
 - `adult`, `video` a `softcore` jsou vždy `False`, takže se vynechají.
 
 Do venv přibyly dev závislosti `nbclient` a `nbformat` pro spuštění notebooku z příkazové řádky (`uv add --dev nbclient nbformat`).
+
+### Krok 1.4 – Scraper podle strategie, test na `CZ`
+
+Scraper (`scraper/main.py`) je přepsaný podle sekce Rozhodnutí. Všechny parametry jsou v `scraper/config.toml` s komentáři:
+- `[discover]`: země, `min_runtime`, `year_from`, `years_ahead`, adult/video, jazyk textů,
+- `[trim]`: `cast_top_n` a `crew_jobs`,
+- `[output]`: prefix, velikost částí, gzip,
+- `[api]`: `workers` a `max_requests_per_second`.
+
+Jak scraper funguje:
+- Pro každou zemi stáhne `/discover/movie` přes celý rozsah dat vydání. Pokud má rozsah víc než 10 000 výsledků (limit TMDB), rozdělí ho napůl a pokračuje, dokud se nevejde.
+- Detaily stahuje paralelně (8 vláken) se společným stropem 30 dotazů za sekundu a při `429` nebo `5xx` dotaz zopakuje.
+- Výstup nahrává průběžně po částech. Každý detail má pole `_fetched_at`. Celá konfigurace a počty jdou do `manifest.json`.
+
+Nasazení (`--task-timeout 6h`, `--memory 1Gi`) a testovací spuštění s přepsanými parametry:
+```bash
+gcloud run jobs deploy films-scraper --source scraper --region us-central1 \
+  --service-account films-scraper@films-512811.iam.gserviceaccount.com \
+  --set-secrets "TMDB_TOKEN=tmdb-read-token:latest" --set-env-vars "BUCKET=films-512811-raw" \
+  --max-retries 0 --task-timeout 6h --memory 1Gi
+gcloud run jobs execute films-scraper --region us-central1 --update-env-vars "COUNTRIES=CZ,YEAR_FROM=2024,YEAR_TO=2024" --wait
+gcloud run jobs execute films-scraper --region us-central1 --update-env-vars "COUNTRIES=CZ" --async
+```
+
+Výsledky (2026-10-26):
+| Běh | Filmů | Chyb | Doba | details | lists |
+|---|---|---|---|---|---|
+| CZ 2024 | 145 | 0 | 6 s | 1 soubor, 0,77 MB | 1 soubor, 0,11 MB |
+| CZ 1900–2028 | 2 910 | 0 | 115 s | 3 soubory, 16,6 MB (~5,7 kB na film) | 1 soubor, 2,1 MB |
+
+Oříznutí credits ověřené na vzorku z kroku 1.2: z 44,3 kB na 12,2 kB na film u populárních filmů. U celého CZ katalogu je to ~5,7 kB na film, protože méně známé filmy mají menší štáb.

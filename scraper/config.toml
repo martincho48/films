@@ -1,0 +1,42 @@
+# Konfigurace TMDB scraperu.
+# Změna = úprava tohoto souboru + nové nasazení jobu (gcloud run jobs deploy).
+# Celá konfigurace se ukládá do manifest.json každého běhu.
+# Pro jednorázový test jde přepsat proměnnými prostředí:
+#   COUNTRIES=CZ,SK  YEAR_FROM=2024  YEAR_TO=2024  MAX_MOVIES=50
+
+[discover]                       # KTERÉ FILMY se stahují (filtry přímo v TMDB API)
+countries = [                    # země původu filmu (ISO 3166-1), pole origin_country
+  "US", "GB", "CA", "AU", "IE", "NZ",                                           # anglofonní
+  "CZ", "SK",                                                                   # Česko a Slovensko
+  "FR", "DE", "IT", "ES", "BE", "NL", "AT", "CH", "DK", "SE", "NO", "FI", "PL",  # západní a severní Evropa
+  "KR", "JP", "CN", "HK", "IN",                                                 # Asie
+]
+min_runtime = 40                 # minuty; vyřadí i filmy s neznámou délkou
+include_adult = false
+include_video = false
+year_from = 1900                 # od kterého roku vydání procházet katalog
+years_ahead = 2                  # kolik let dopředu (oznámené budoucí filmy)
+language = "en-US"               # jazyk textů (název, popis, žánry), NEfiltruje filmy
+
+[trim]                           # CO SE Z FILMU ULOŽÍ (oříznutí credits, zbytek beze změny)
+cast_top_n = 20                  # prvních N herců podle pořadí v titulcích (order)
+crew_jobs = [                    # role štábu, které se ponechají (všichni lidé v roli)
+  "Director",
+  "Writer", "Screenplay", "Novel", "Story",
+  "Producer", "Executive Producer",
+  "Director of Photography",
+  "Original Music Composer",
+  "Editor",
+  "Casting",
+]
+
+[output]                         # JAK SE UKLÁDÁ
+prefix = "raw/tmdb"              # složka v bucketu
+details_per_part = 1000          # filmů v jednom souboru details/part-*.jsonl
+list_pages_per_part = 500        # stránek seznamu v jednom souboru lists/part-*.jsonl
+gzip = false                     # true = .jsonl.gz (BigQuery čte přímo)
+
+[api]                            # CHOVÁNÍ VŮČI TMDB API
+workers = 8                      # paralelní stahování detailů
+max_requests_per_second = 30     # strop pro všechna vlákna dohromady (TMDB limit je vyšší)
+max_results_per_query = 10000    # limit TMDB (500 stránek x 20); větší rozsah se dělí
