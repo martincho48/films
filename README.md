@@ -299,6 +299,28 @@ flowchart LR
 - **Artifact Registry** je úložiště Docker imagí. Repo `cloud-run-source-deploy` vytvoří `gcloud` automaticky při prvním nasazení. Free tier je 0,5 GB a staré verze imagí se hromadí, takže časem nastavíme jejich automatické mazání.
 - Ve fázi IV bude kroky 1 až 3 dělat GitHub Actions při každém `git push`.
 
+#### Co je Docker image a proč ho potřebujeme
+
+Cloud Run je cizí počítač v Googlu, který nemá náš Python, knihovny ani kód. **Image je zabalený „mini počítač“** se vším, co scraper ke spuštění potřebuje. Každý řádek `scraper/Dockerfile` přidá jednu vrstvu:
+
+```
+┌─────────────── image (~19 MB) ───────────────┐
+│  3. náš kód:         main.py, config.toml   │  ← COPY main.py config.toml ./
+│  2. knihovny:        requests, google-cloud │  ← RUN pip install -r requirements.txt
+│  1. základ:          Linux + Python 3.12    │  ← FROM python:3.12-slim
+│  příkaz po startu:   python main.py         │  ← CMD ["python", "main.py"]
+└─────────────────────────────────────────────┘
+```
+
+Přirovnání k jídlu:
+- `Dockerfile` je **recept**,
+- **image** je **hotové zamrazené jídlo**: uvaří ho jednou Cloud Build a uloží do „mrazáku“, tedy Artifact Registry,
+- **spuštění jobu** je **ohřátí porce**: Cloud Run z image vytvoří běžící kontejner, spustí `python main.py`, ten stáhne filmy do bucketu a kontejner se zahodí. Další běh vezme stejný image, nic se znovu neinstaluje.
+
+Důležité:
+- **`config.toml` je uvnitř image.** Změna souboru lokálně se do cloudu nedostane, dokud se znovu nespustí `gcloud run jobs deploy`, tedy dokud se nevyrobí nový image.
+- **Každé nasazení vytvoří novou verzi image.** Job vždy používá poslední. Artifact Registry drží poslední 3 verze (krok 1.7) kvůli rychlému návratu zpět.
+
 Nasazení (Cloud Build sestaví image z Dockerfile do Artifact Registry `cloud-run-source-deploy`):
 ```bash
 gcloud run jobs deploy films-scraper --source scraper --region us-central1 \
