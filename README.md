@@ -132,7 +132,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
 ## Roadmap
 
 - [ ] **Fáze 0:** lokální prostředí (uv venv, struktura repa, `.gitignore`), GCP projekt (přihlášení přes `gcloud`, zapnutí API včetně `aiplatform.googleapis.com`, budget alert)
-- [ ] **Fáze I:** GCS raw bucket, BigQuery dataset a tabulky, MERGE, extrakční job
+- [x] **Fáze I:** GCS raw bucket, BigQuery dataset a tabulky, MERGE, extrakční job (hotovo 2026-10-26)
   - [x] Secret, bucket a service account (krok 1.1)
   - [x] Vzorový scraping jako Cloud Run Job (krok 1.2)
   - [x] EDA surových dat (krok 1.3)
@@ -147,7 +147,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] BigQuery: `silver.movies`, čištění a filtr kvality (`sql/02_silver_movies.sql`, krok 1.9)
   - [x] BigQuery: `gold.movies` (`MERGE`) a `gold.movie_snapshots` (`INSERT`) (krok 1.10)
   - [x] Automatizace: Cloud Scheduler (scraper týdně a měsíčně) a Scheduled Query `gold-load` (denně, načte jen nový běh) (krok 1.11)
-  - [ ] Budget `films` se spend capem na Cloud Run a e-mailovými alerty
+  - [x] Budget `films` se spend capem na Cloud Run, 100 Kč měsíčně (krok 1.12)
   - [x] Pojistky ve scraperu (`max_runtime_minutes`, circuit breaker) (krok 1.5)
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
@@ -636,5 +636,18 @@ Pozor: `sql/04_gold_load.sql` je do Scheduled Query zkopírovaný. Po změně so
 - `sql/04_gold_load.sql` tyto znaky neobsahuje (ani v komentářích),
 - Scheduled Query se aktualizuje voláním `bq.py` přímo přes Python z Cloud SDK, bez `cmd.exe` (`platform\bundledpython\python.exe platform\bq\bq.py update --transfer_config …`),
 - po aktualizaci se kontroluje, že uložený dotaz (`bq show --format=json --transfer_config …` → `params.query`) je stejný jako soubor. Ověřeno 2026-10-26.
+
+### Krok 1.12 – Kill switch: spend cap na Cloud Run
+
+Nastaveno ručně v konzoli (Billing → Budgets & caps → Create budget):
+| Pole | Hodnota |
+|---|---|
+| Name | `films` |
+| Time range | Monthly (spend cap jinak nejde) |
+| Projects | `films (films-512811)` |
+| Services | `Cloud Run (run.googleapis.com)`. Spend cap jde jen na jednu službu, Cloud Run pokrývá scraper a později aplikaci |
+| Amount | **100 Kč** měsíčně |
+
+Při dosažení částky GCP pozastaví Cloud Run (scraper i budoucí aplikaci). Vypnutí není okamžité a útrata nad limit se doplatí. BigQuery, Cloud Storage a Cloud Build spend cap nemají, jsou ve free tieru. Cap pro Vertex AI (Gemini) přibude ve fázi II.
 
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
