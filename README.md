@@ -132,7 +132,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] ~~Plný běh pro všech 26 zemí~~ zrušen po 14 minutách, katalog byl příliš velký (viz Rozhodnutí)
   - [x] Scraper se třemi zdroji (top 10k, kina US/CZ, novinky 23 zemí), režimy `full` a `weekly` (krok 1.5)
   - [x] Ostrý běh `weekly` a `full` (krok 1.5)
-  - [ ] Lifecycle pravidlo bucketu (160 dní)
+  - [x] Lifecycle pravidla bucketů (raw 160 dní, run-sources 30 dní) a cleanup Artifact Registry (poslední 3 verze) (krok 1.7)
   - [ ] BigQuery: dataset `films`, external table, SQL pro cleaning
   - [ ] BigQuery: `movies` (`MERGE`) a `movie_snapshots` (`INSERT`)
   - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
@@ -400,5 +400,25 @@ Hlavní zjištění:
 - **Kina mají taky šum.** Filmy jen z kin: 62 % bez hlasu, 44 % `runtime < 40`. Kino premiéru v CZ má jen 12–22 % filmů z kin.
 - U novinek a kin bude potřeba filtr na kvalitu (délka, popis, plakát, popularita nebo hlasy). O tom se rozhodne při čištění v BigQuery.
 - JSONL se musí číst po řádcích `\n`, ne přes `splitlines()`, protože texty obsahují znaky jako U+2028.
+
+### Krok 1.7 – Automatický úklid úložišť
+
+| Úložiště | Pravidlo | Proč |
+|---|---|---|
+| `gs://films-512811-raw` | smazat soubory starší než **160 dní** | zůstane ~5 měsíčních a ~23 týdenních běhů, ustálený stav ~1,7 GB (free tier 5 GB) |
+| `gs://run-sources-films-512811-us-central1` | smazat soubory starší než **30 dní** | zipy zdrojáků jsou po sestavení image zbytečné |
+| Artifact Registry `cloud-run-source-deploy` | ponechat **poslední 3 verze** image, starší smazat | job používá jen poslední. 3 verze kvůli rychlému návratu zpět a pro případ, že nasazení selže po nahrání image (~60 MB, free tier 0,5 GB) |
+
+```bash
+# lifecycle-160.json: {"rule":[{"action":{"type":"Delete"},"condition":{"age":160}}]}
+gcloud storage buckets update gs://films-512811-raw --lifecycle-file=lifecycle-160.json
+# lifecycle-30.json:  {"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}
+gcloud storage buckets update gs://run-sources-films-512811-us-central1 --lifecycle-file=lifecycle-30.json
+# ar-cleanup.json: [{"name":"keep-3-most-recent","action":{"type":"Keep"},"mostRecentVersions":{"keepCount":3}},
+#                   {"name":"delete-older","action":{"type":"Delete"},"condition":{"tagState":"any"}}]
+gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy --location us-central1 --policy=ar-cleanup.json --no-dry-run
+```
+
+Úklid spouští GCP sám na pozadí (obvykle jednou denně), ne okamžitě po nastavení. Stav k 2026-10-26: raw bucket 233 MB, `run-sources` 0,1 MB, Artifact Registry 134 MB (7 verzí, úklid na 3 proběhne sám).
 
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
