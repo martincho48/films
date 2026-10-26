@@ -14,7 +14,7 @@ countries = [                    # země původu filmu (ISO 3166-1), pole origin
 min_runtime = 40                 # minuty; vyřadí i filmy s neznámou délkou
 include_adult = false
 include_video = false
-year_from = 1940                 # od kterého roku vydání stahovat filmy (filtr v API)
+year_from = 1920                # od kterého roku vydání stahovat filmy (filtr v API)
 years_ahead = 2                  # kolik let dopředu (oznámené budoucí filmy)
 language = "en-US"               # jazyk textů (název, popis, žánry), NEfiltruje filmy
 
