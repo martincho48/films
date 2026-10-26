@@ -1,0 +1,15 @@
+# Old Azure project, kept only locally as reference
+old/
+
+# Downloaded data
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Secrets
+.env
+*.json.key
