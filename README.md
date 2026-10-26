@@ -45,12 +45,43 @@ GitHub push ──► GitHub Actions ──► build image ──► deploy na C
   - Části se nasazují nezávisle, takže chyba v buildu aplikace neblokuje ETL a naopak.
   - Schéma BigQuery, scraper i aplikace jsou v jednom repu, takže změna schématu je v jednom commitu.
   - Přihlášení GitHub Actions do GCP (Workload Identity Federation) se nastaví jednou pro celé repo.
-  - Za běhu má každá část vlastní service account s minimálními právy: `films-scraper` (secret TMDB, zápis do bucketu, později BigQuery) a `films-app` (čtení z BigQuery, Vertex AI). Aplikace k TMDB tokenu přístup nemá.
+  - Za běhu má každá část vlastní service account s minimálními právy: `films-scraper` (secret TMDB, zápis do bucketu) a `films-app` (čtení z BigQuery, Vertex AI). Aplikace k TMDB tokenu přístup nemá.
+- **Strategie scrapingu: každý měsíc plné stažení katalogu.** S filtry a oříznutím vychází zhruba 12 kB na film, takže plné stažení je levné a jednodušší než přírůstky. Smazané filmy, opravy chyb i změny nastavení se projeví samy.
+  - **Filtry přímo v API** (`/discover/movie`): `include_adult=false`, `include_video=false`, `with_runtime.gte=40` (oficiální hranice celovečerního filmu podle AMPAS a BFI; vyřadí i filmy s neznámou délkou) a `with_origin_country` podle seznamu zemí. Stahují se **všechny filmy** z vybraných zemí bez prahu `vote_count`. Méně známé filmy se filtrují až v BigQuery nebo v aplikaci podle `vote_count`. Katalog se prochází po zemích a letech (TMDB vrací nejvýš 500 stránek, tedy 10 000 filmů na dotaz). Rok, který se do limitu nevejde, se dělí na měsíce. Duplicity se sloučí podle `id`. Jazyk se nefiltruje, `original_language` zůstává jako sloupec.
+  - **Výchozí seznam zemí (27):** `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP, CN, HK, IN`. Dá se kdykoli změnit a další měsíční běh se tomu přizpůsobí.
+  - **Všechny parametry jsou v `scraper/config.toml`** (v repu, s komentáři), rozdělené na `[discover]` (které filmy), `[trim]` (co z filmu uložit) a `[output]` (jak ukládat). Změna = úprava souboru a nové nasazení jobu. Celá konfigurace se kopíruje do `manifest.json` každého běhu. Pro jednorázové testy jde parametr přepsat proměnnou prostředí (například `COUNTRIES=CZ`).
+  - **Oříznutí `credits` už ve scraperu**, všechno ostatní zůstane, jak to TMDB vrátilo: cast prvních 20 herců podle `order`, crew jen klíčové role (Director, Writer, Screenplay, Novel, Story, Producer, Executive Producer, Director of Photography, Original Music Composer, Editor, Casting) se všemi lidmi v roli. Pravidla oříznutí se zapisují do `manifest.json` každého běhu.
+  - **Scraper je nezávislý na BigQuery.** Jen stahuje do GCS a nic nečte ani nezapisuje do BigQuery.
+- **Raw bucket: každý běh má vlastní složku a ukládá se po částech.**
+  ```
+  raw/tmdb/dt=YYYY-MM-DD/run_…/
+      lists/part-0001.jsonl      # surové stránky seznamů
+      details/part-0001.jsonl    # max. 1 000 filmů na část, nahrává se průběžně
+      manifest.json              # zapisuje se jako poslední = běh je úplný
+  ```
+  **Formát raw je JSONL, ne Parquet.** Je to přesná kopie odpovědi TMDB, nové nebo prázdné pole nezpůsobí konflikt schémat mezi částmi a scraper nepotřebuje `pyarrow`. Sloupcové uložení zajistí až nativní tabulky BigQuery. Pokud by objem dat byl větší, než se čeká, zapne se gzip (`.jsonl.gz`), který BigQuery čte přímo.
+
+  Lifecycle pravidlo bucketu maže soubory starší než 160 dní, takže zůstává zhruba posledních 5 měsíčních běhů. Mazání řídí GCP, job nepotřebuje právo mazat.
+- **Načítání do BigQuery čistě přes SQL.** External table nad raw bucketem a Scheduled Query jednou měsíčně (po scraperu) vezme poslední úplný běh (s `manifest.json`), vyčistí ho a:
+  - `MERGE` do `movies`: 1 řádek na film, aktuální stav. Filmy, které v běhu chybí (například z odebrané země), dostanou `in_catalog = FALSE` a nemažou se.
+  - `INSERT` do `movie_metrics_history`: `vote_average`, `vote_count` a `popularity` za každý běh, aby historie metrik přežila mazání raw.
+  - Opakované spuštění nic nerozbije, protože `MERGE` je idempotentní.
 
 ## Roadmap
 
 - [ ] **Fáze 0:** lokální prostředí (uv venv, struktura repa, `.gitignore`), GCP projekt (přihlášení přes `gcloud`, zapnutí API včetně `aiplatform.googleapis.com`, budget alert)
 - [ ] **Fáze I:** GCS raw bucket, BigQuery dataset a tabulky, MERGE, extrakční job
+  - [x] Secret, bucket a service account (krok 1.1)
+  - [x] Vzorový scraping jako Cloud Run Job (krok 1.2)
+  - [x] EDA surových dat (krok 1.3)
+  - [ ] Přepis scraperu podle strategie a test na jednom roce `CZ`
+  - [ ] Ostrý běh na `CZ` (skutečný objem a doba běhu)
+  - [ ] Plný běh pro všech 27 zemí
+  - [ ] Lifecycle pravidlo bucketu (160 dní)
+  - [ ] BigQuery: dataset `films`, external table, SQL pro cleaning
+  - [ ] BigQuery: `movies` (`MERGE`) a `movie_metrics_history` (`INSERT`)
+  - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
+  - [ ] Budget alert
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
@@ -229,3 +260,16 @@ gcloud storage cp -r gs://films-512811-raw/raw/tmdb data/raw/
 ```
 
 První běh (2026-10-26) dopadl takto: 1 stránka discover a 1 stránka upcoming, tedy 40 filmů, z toho 31 unikátních. Detaily se stáhly u všech 31 a žádný neselhal. Data mají 1,37 MiB, z toho 1,4 MB je `movie_details.jsonl` (kolem 45 kB na film, většinu tvoří `credits`). Upcoming má v době běhu 88 stránek. Složky `data/` a `old/` jsou v `.gitignore`.
+
+### Krok 1.3 – EDA surových dat
+
+Notebook `eda/01_raw_tmdb.ipynb` (kernel `uv_films`) načte nejnovější běh z `data/raw/tmdb/` a projde manifest, oba seznamy filmů, ploché sloupce (null, prázdné a nulové hodnoty, rozdělení), vnořená pole, credits a keywords a velikost dat. Závěry jsou v poslední sekci notebooku.
+
+Hlavní zjištění ze vzorku 31 filmů:
+- `/movie/upcoming` bez `region` vrací hlavně už vydané filmy (jen 2 z 20 jsou po dni běhu).
+- `/discover/movie` hlásí 1001 stránek, ale TMDB vrací nejvýš 500, takže plný katalog je potřeba stahovat po řezech (například po letech).
+- `budget` a `revenue` = 0 (9 z 31) a `vote_average` = 0 při `vote_count` = 0 znamenají „neznámé“, tedy `NULL`. Prázdné `tagline` a `homepage` také → `NULL`.
+- `credits` tvoří 96 % objemu (44 kB na film, z toho 76 % crew s 384 různými joby). Do BigQuery půjdou jen klíčové role jako `ARRAY` na roli (až 2 režiséři, až 12 producentů) a prvních N herců podle `order`.
+- `adult`, `video` a `softcore` jsou vždy `False`, takže se vynechají.
+
+Do venv přibyly dev závislosti `nbclient` a `nbformat` pro spuštění notebooku z příkazové řádky (`uv add --dev nbclient nbformat`).
