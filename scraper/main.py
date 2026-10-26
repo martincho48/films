@@ -310,8 +310,9 @@ def main() -> None:
         "new_release_segments": segments,
         "files": lists.files + details.files,
     }
+    # Single line, so BigQuery can read manifests as newline-delimited JSON
     bucket.blob(f"{run_prefix}/manifest.json").upload_from_string(
-        json.dumps(manifest, ensure_ascii=False, indent=2), content_type="application/json"
+        json.dumps(manifest, ensure_ascii=False), content_type="application/json"
     )
     log.info("done in %ds: %d details, %d failed", manifest["duration_s"], details.count, len(failures))
 

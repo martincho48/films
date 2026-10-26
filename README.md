@@ -133,7 +133,8 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Scraper se třemi zdroji (top 10k, kina US/CZ, novinky 23 zemí), režimy `full` a `weekly` (krok 1.5)
   - [x] Ostrý běh `weekly` a `full` (krok 1.5)
   - [x] Lifecycle pravidla bucketů (raw 160 dní, run-sources 30 dní) a cleanup Artifact Registry (poslední 3 verze) (krok 1.7)
-  - [ ] BigQuery: dataset `films`, external table, SQL pro cleaning
+  - [x] BigQuery: dataset `films` a external tables `raw_details`, `raw_manifests` (krok 1.8)
+  - [ ] BigQuery: SQL pro cleaning a filtr kvality novinek a kin
   - [ ] BigQuery: `movies` (`MERGE`) a `movie_snapshots` (`INSERT`)
   - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
   - [ ] Budget `films` se spend capem na Cloud Run a e-mailovými alerty
@@ -442,5 +443,20 @@ gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy --loc
 ```
 
 Úklid spouští GCP sám na pozadí (obvykle jednou denně), ne okamžitě po nastavení. Stav k 2026-10-26: raw bucket 233 MB, `run-sources` 0,1 MB, Artifact Registry 134 MB (7 verzí, úklid na 3 proběhne sám).
+
+### Krok 1.8 – BigQuery: dataset a external tables nad raw
+
+- **Dataset `films-512811:films`** v `us-central1`:
+  ```bash
+  bq --location=us-central1 mk --dataset --description "TMDB films: raw external tables and cleaned tables" films-512811:films
+  ```
+- **External tables** (`sql/01_raw_external_tables.sql`). BigQuery čte JSONL přímo z GCS, nic se nekopíruje. `mode` a `run` jsou sloupce z cesty (hive partitioning).
+  - `raw_details`: detaily filmů. Schéma má jen pole, která používáme, ostatní se ignorují. Maska `tmdb/*.jsonl` zachytí i `lists/`, proto se filtruje `_FILE_NAME LIKE '%/details/%'`. BigQuery dovoluje jen jednu `*` v cestě.
+  - `raw_manifests`: jeden řádek na úplný běh. Scraper teď zapisuje `manifest.json` na jeden řádek, aby šel číst jako JSONL. Oba existující manifesty jsou přepsané.
+  ```bash
+  bq query --use_legacy_sql=false --location=us-central1 < sql/01_raw_external_tables.sql
+  ```
+  Pozor na Windows PowerShell 5.1: při posílání souboru do `bq` přes `|` přidá BOM a dotaz selže na „Illegal input character \357“. Je potřeba použít přesměrování přes `cmd /c "bq query ... < soubor.sql"`.
+- **Ověření** (2026-10-26): `full` 15 290 filmů a `weekly` 5 407 filmů, přesně podle manifestů. Vnořená pole (`credits`, `release_dates`, `_sources`) se načítají a znaky U+2028 v textech BigQuery nevadí.
 
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
