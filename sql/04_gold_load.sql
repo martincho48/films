@@ -1,8 +1,10 @@
 -- GOLD: načtení posledního úplného běhu ze silver.movies.
 -- Automaticky: BigQuery Scheduled Query "gold-load" každý den. Když je poslední běh už
 -- načtený, skript hned skončí, takže gold se mění jen jednou za každý nový běh scraperu.
--- Ručně (Windows: přes cmd kvůli BOM):
---   cmd /c "bq query --use_legacy_sql=false --location=us-central1 < sql/04_gold_load.sql"
+-- Ručně: bq query --use_legacy_sql=false --location=us-central1 se vstupem z tohoto souboru
+--   (Windows: přes cmd /c a přesměrování vstupu kvůli BOM, viz README krok 1.8).
+-- Pozor: v tomto souboru nepoužívat znaky menší/větší než, svislou čáru ani ampersand.
+-- Při aktualizaci Scheduled Query přes bq.cmd je Windows cmd bere jako přesměrování.
 --
 -- Příznaky zdrojů:
 --   is_top_rated                          mění jen běh full (weekly top 10k nestahuje)
@@ -22,7 +24,7 @@ SET (v_run, v_run_at, v_is_full) = (
   LIMIT 1
 );
 
--- Poslední běh už je načtený (má snapshoty) -> nic nedělat
+-- Poslední běh už je načtený (má snapshoty), takže nic nedělat
 IF EXISTS (SELECT 1 FROM `films-512811.gold.movie_snapshots` WHERE run = v_run) THEN
   SELECT FORMAT('run %s already loaded, nothing to do', v_run) AS status;
   RETURN;

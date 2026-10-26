@@ -630,6 +630,11 @@ bq mk --transfer_run --run_time=<teď v UTC> projects/188138853287/locations/us-
 
 **Test celého cyklu (2026-10-26):** ruční spuštění `films-scraper-weekly` → scraper s `MODE=weekly` (běh `2026-10-26T15-20-14Z`) → ruční spuštění `gold-load` → `SUCCEEDED`. V `gold.movie_snapshots` jsou 2 běhy, týdenní běh aktualizoval `last_seen_at` a `is_top_rated` zůstal beze změny, protože týdenní běh top 10k nemění. Opakované spuštění pro už načtený běh skončí hláškou „already loaded, nothing to do“.
 
-Pozor: `sql/04_gold_load.sql` je do Scheduled Query zkopírovaný. Po změně souboru je potřeba Scheduled Query aktualizovat (`bq update --transfer_config --params=…`), jinak poběží stará verze.
+Pozor: `sql/04_gold_load.sql` je do Scheduled Query zkopírovaný. Po změně souboru je potřeba Scheduled Query aktualizovat (`bq update --transfer_config --params='{"query": …}' <config>`), jinak poběží stará verze.
+
+**Past na Windows:** `bq` je dávkový soubor `bq.cmd`, takže jeho argumenty zpracovává `cmd.exe`. Text SQL v `--params` se znaky `>`, `<`, `|` nebo `&` se tím rozbije. Při prvním vytvoření se tak komentář `-> nic` změnil na přesměrování do souboru `nic`. Opatření:
+- `sql/04_gold_load.sql` tyto znaky neobsahuje (ani v komentářích),
+- Scheduled Query se aktualizuje voláním `bq.py` přímo přes Python z Cloud SDK, bez `cmd.exe` (`platform\bundledpython\python.exe platform\bq\bq.py update --transfer_config …`),
+- po aktualizaci se kontroluje, že uložený dotaz (`bq show --format=json --transfer_config …` → `params.query`) je stejný jako soubor. Ověřeno 2026-10-26.
 
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
