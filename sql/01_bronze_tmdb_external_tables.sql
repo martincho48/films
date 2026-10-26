@@ -1,11 +1,12 @@
--- External tables nad raw bucketem: BigQuery čte JSONL přímo z GCS, data se nekopírují.
+-- BRONZE: external tables nad raw bucketem. BigQuery čte JSONL přímo z GCS, data se nekopírují.
 -- Sloupce mode a run se berou z cesty tmdb/mode=…/run=…/ (hive partitioning).
--- Spuštění: bq query --use_legacy_sql=false < sql/01_raw_external_tables.sql
+-- Spuštění (Windows: přes cmd kvůli BOM):
+--   cmd /c "bq query --use_legacy_sql=false --location=us-central1 < sql/01_bronze_tmdb_external_tables.sql"
 
 -- Detaily filmů. Schéma obsahuje jen pole, která používáme; ostatní se ignorují
 -- (ignore_unknown_values). Maska *.jsonl zachytí i lists/, jejich řádky mají id = NULL
 -- a filtrují se přes _FILE_NAME LIKE '%/details/%'.
-CREATE OR REPLACE EXTERNAL TABLE `films-512811.films.raw_details` (
+CREATE OR REPLACE EXTERNAL TABLE `films-512811.bronze.tmdb_details` (
   id INT64,
   imdb_id STRING,
   title STRING,
@@ -54,7 +55,7 @@ OPTIONS (
 );
 
 -- Manifesty běhů: běh je úplný, jen když má manifest.json (zapisuje se jako poslední).
-CREATE OR REPLACE EXTERNAL TABLE `films-512811.films.raw_manifests` (
+CREATE OR REPLACE EXTERNAL TABLE `films-512811.bronze.tmdb_manifests` (
   started_at STRING,
   finished_at STRING,
   duration_s INT64,

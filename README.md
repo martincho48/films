@@ -103,6 +103,15 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   **Formát raw je JSONL, ne Parquet.** Je to přesná kopie odpovědi TMDB, nové nebo prázdné pole nezpůsobí konflikt schémat mezi částmi a scraper nepotřebuje `pyarrow`. Sloupcové uložení zajistí až nativní tabulky BigQuery. Pokud by objem dat byl větší, než se čeká, zapne se gzip (`.jsonl.gz`), který BigQuery čte přímo.
 
   Lifecycle pravidlo bucketu maže soubory starší než 160 dní, takže zůstává zhruba posledních 5 měsíčních běhů. Mazání řídí GCP, job nepotřebuje právo mazat.
+- **BigQuery ve vrstvách bronze → silver → gold (medallion), každá vrstva má vlastní dataset.** Oddělené datasety umožní dát aplikaci (`films-app`) přístup jen ke `gold`.
+
+  | Dataset | Objekt | Typ | Obsah |
+  |---|---|---|---|
+  | `bronze` | `tmdb_details`, `tmdb_manifests` | external tables | surová data z GCS, jak přišla z TMDB |
+  | `silver` | `movies` | view | vyčištěné filmy z posledního úplného běhu (`sql/02_silver_movies.sql`) |
+  | `gold` | `movies`, `movie_snapshots` | tabulky | finální katalog (`MERGE`) a historie pro aplikaci a Gemini |
+
+  Čištění bronze → silver: `0` a prázdné texty → `NULL` (`runtime`, `budget`, `revenue`, `overview`, `tagline`, `homepage`), `vote_average` → `NULL` bez hlasů, `release_date` → `DATE`, `poster_path` → celá URL, seznamy objektů → seznamy jmen (žánry, keywords, společnosti, země, jazyky), štáb rozdělený na `directors`, `writers`, `producers`, `cinematographers`, `composers`, `editors`, herci jako `top_cast` (jméno, postava, pořadí), `release_date_cz` a `release_date_us` (kino premiéra), příznaky zdrojů (`is_top_rated`, `in_cinema_us/cz`, `upcoming_us/cz`, `is_new_release`). Vynechá se `adult` a `backdrop_path`. Řádky: jen poslední úplný běh, každý film jednou. **Filtr kvality:** top 10k projde vždy, novinky a kina jen s popisem, plakátem a `runtime ≥ 40` nebo neznámým.
 - **Načítání do BigQuery čistě přes SQL.** External table nad raw bucketem a Scheduled Query (po každém běhu scraperu) vezme poslední úplný běh (s `manifest.json`), vyčistí ho a:
   - `MERGE` do `movies`: 1 řádek na film, aktuální stav (tabulka roste jen s počtem filmů, ne s počtem běhů) včetně aktuálních `sources`. `in_catalog = FALSE` dostanou jen filmy, které chybí v posledním **měsíčním** (`full`) běhu. Týdenní běh obsahuje jen kina a novinky, takže by jinak „vyřadil“ celý top 10k. Filmy se nemažou. Časové sloupce:
     - `first_seen_at`: první běh, ve kterém se film objevil. Nastaví se jednou a `MERGE` ho nikdy nepřepíše, takže „novinky v měsíci“ jdou filtrovat kdykoli zpětně. V prvním běhu ho dostanou všechny existující filmy, takže smysluplné novinky jsou až od druhého běhu.
@@ -134,7 +143,8 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Ostrý běh `weekly` a `full` (krok 1.5)
   - [x] Lifecycle pravidla bucketů (raw 160 dní, run-sources 30 dní) a cleanup Artifact Registry (poslední 3 verze) (krok 1.7)
   - [x] BigQuery: dataset `films` a external tables `raw_details`, `raw_manifests` (krok 1.8)
-  - [ ] BigQuery: SQL pro cleaning a filtr kvality novinek a kin
+  - [ ] BigQuery: přejmenování na vrstvy `bronze` / `silver` / `gold` (SQL připravené, v BigQuery zatím neprovedené)
+  - [ ] BigQuery: `silver.movies`, čištění a filtr kvality (SQL připravené v `sql/02_silver_movies.sql`, zatím nespuštěné ani neověřené)
   - [ ] BigQuery: `movies` (`MERGE`) a `movie_snapshots` (`INSERT`)
   - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
   - [ ] Budget `films` se spend capem na Cloud Run a e-mailovými alerty
@@ -450,11 +460,11 @@ gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy --loc
   ```bash
   bq --location=us-central1 mk --dataset --description "TMDB films: raw external tables and cleaned tables" films-512811:films
   ```
-- **External tables** (`sql/01_raw_external_tables.sql`). BigQuery čte JSONL přímo z GCS, nic se nekopíruje. `mode` a `run` jsou sloupce z cesty (hive partitioning).
+- **External tables** (původně `sql/01_raw_external_tables.sql`, teď `sql/01_bronze_tmdb_external_tables.sql`, viz rozhodnutí o vrstvách bronze/silver/gold). BigQuery čte JSONL přímo z GCS, nic se nekopíruje. `mode` a `run` jsou sloupce z cesty (hive partitioning).
   - `raw_details`: detaily filmů. Schéma má jen pole, která používáme, ostatní se ignorují. Maska `tmdb/*.jsonl` zachytí i `lists/`, proto se filtruje `_FILE_NAME LIKE '%/details/%'`. BigQuery dovoluje jen jednu `*` v cestě.
   - `raw_manifests`: jeden řádek na úplný běh. Scraper teď zapisuje `manifest.json` na jeden řádek, aby šel číst jako JSONL. Oba existující manifesty jsou přepsané.
   ```bash
-  bq query --use_legacy_sql=false --location=us-central1 < sql/01_raw_external_tables.sql
+  bq query --use_legacy_sql=false --location=us-central1 < sql/01_raw_external_tables.sql   # tehdejší název souboru
   ```
   Pozor na Windows PowerShell 5.1: při posílání souboru do `bq` přes `|` přidá BOM a dotaz selže na „Illegal input character \357“. Je potřeba použít přesměrování přes `cmd /c "bq query ... < soubor.sql"`.
 - **Ověření** (2026-10-26): `full` 15 290 filmů a `weekly` 5 407 filmů, přesně podle manifestů. Vnořená pole (`credits`, `release_dates`, `_sources`) se načítají a znaky U+2028 v textech BigQuery nevadí.
