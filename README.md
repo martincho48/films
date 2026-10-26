@@ -113,11 +113,11 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
 
   Čištění bronze → silver: `0` a prázdné texty → `NULL` (`runtime`, `budget`, `revenue`, `overview`, `tagline`, `homepage`), `vote_average` → `NULL` bez hlasů, `release_date` → `DATE`, `poster_path` → celá URL, seznamy objektů → seznamy jmen (žánry, keywords, společnosti, země, jazyky), štáb rozdělený na `directors`, `writers`, `producers`, `cinematographers`, `composers`, `editors`, herci jako `top_cast` (jméno, postava, pořadí), `release_date_cz` a `release_date_us` (kino premiéra), příznaky zdrojů (`is_top_rated`, `in_cinema_us/cz`, `upcoming_us/cz`, `is_new_release`). Vynechá se `adult` a `backdrop_path`. Řádky: jen poslední úplný běh, každý film jednou. **Filtr kvality:** top 10k projde vždy, novinky a kina jen s popisem, plakátem a `runtime ≥ 40` nebo neznámým.
 - **Načítání do BigQuery čistě přes SQL.** External table nad raw bucketem a Scheduled Query (po každém běhu scraperu) vezme poslední úplný běh (s `manifest.json`), vyčistí ho a:
-  - `MERGE` do `movies`: 1 řádek na film, aktuální stav (tabulka roste jen s počtem filmů, ne s počtem běhů) včetně aktuálních `sources`. `in_catalog = FALSE` dostanou jen filmy, které chybí v posledním **měsíčním** (`full`) běhu. Týdenní běh obsahuje jen kina a novinky, takže by jinak „vyřadil“ celý top 10k. Filmy se nemažou. Časové sloupce:
+  - `MERGE` do `gold.movies`: 1 řádek na film, aktuální stav (tabulka roste jen s počtem filmů, ne s počtem běhů). Zdroje jsou jako příznaky: `is_top_rated` mění jen běh `full` (týdenní běh top 10k nestahuje, jinak by ho „vyřadil“), `in_cinema_*`, `upcoming_*` a `is_new_release` mění každý běh. `in_catalog` znamená, že film je aspoň v jednom zdroji. Filmy se nemažou. Časové sloupce:
     - `first_seen_at`: první běh, ve kterém se film objevil. Nastaví se jednou a `MERGE` ho nikdy nepřepíše, takže „novinky v měsíci“ jdou filtrovat kdykoli zpětně. V prvním běhu ho dostanou všechny existující filmy, takže smysluplné novinky jsou až od druhého běhu.
     - `last_seen_at`: poslední běh, ve kterém film byl.
     - `updated_at`: kdy `MERGE` řádek naposledy změnil.
-  - `INSERT` do `movie_snapshots`: 1 řádek na film a běh (`id, run_date, mode, sources, status, release_date, release_date_cz, vote_average, vote_count, popularity`). Slouží pro historii metrik, změny stavu (`Post Production` → `Released`), posuny premiér a historii kin (kdy film začal hrát a kdy zmizel, s týdenní přesností). Je to kolem 120–150 tisíc malých řádků ročně.
+  - `INSERT` do `gold.movie_snapshots`: 1 řádek na film a běh (`run_at, run, run_mode, id, title, status, release_date, release_date_cz, release_date_us, vote_average, vote_count, popularity, sources` a příznaky zdrojů). Slouží pro historii metrik, změny stavu (`Post Production` → `Released`), posuny premiér a historii kin (kdy film začal hrát a kdy zmizel, s týdenní přesností). Je to kolem 120–150 tisíc malých řádků ročně.
   - **`movie_snapshots` se nikdy nemaže ani nepřestavuje z raw.** Je to trvalý záznam historie, protože raw drží jen ~5 měsíců. Kdyby se `movies` přestavovala, `first_seen_at` se dopočítá jako `MIN(run_date)` ze snapshotů.
   - Opakované spuštění nic nerozbije, protože `MERGE` je idempotentní.
 
@@ -143,10 +143,10 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Ostrý běh `weekly` a `full` (krok 1.5)
   - [x] Lifecycle pravidla bucketů (raw 160 dní, run-sources 30 dní) a cleanup Artifact Registry (poslední 3 verze) (krok 1.7)
   - [x] BigQuery: dataset `films` a external tables `raw_details`, `raw_manifests` (krok 1.8)
-  - [ ] BigQuery: přejmenování na vrstvy `bronze` / `silver` / `gold` (SQL připravené, v BigQuery zatím neprovedené)
-  - [ ] BigQuery: `silver.movies`, čištění a filtr kvality (SQL připravené v `sql/02_silver_movies.sql`, zatím nespuštěné ani neověřené)
-  - [ ] BigQuery: `movies` (`MERGE`) a `movie_snapshots` (`INSERT`)
-  - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
+  - [x] BigQuery: přejmenování na vrstvy `bronze` / `silver` / `gold`. Datasety vytvořené, `bronze.tmdb_details` a `bronze.tmdb_manifests` přes `sql/01_bronze_tmdb_external_tables.sql`, starý dataset `films` ručně smazaný v konzoli (2026-10-26)
+  - [x] BigQuery: `silver.movies`, čištění a filtr kvality (`sql/02_silver_movies.sql`, krok 1.9)
+  - [x] BigQuery: `gold.movies` (`MERGE`) a `gold.movie_snapshots` (`INSERT`) (krok 1.10)
+  - [x] Automatizace: Cloud Scheduler (scraper týdně a měsíčně) a Scheduled Query `gold-load` (denně, načte jen nový běh) (krok 1.11)
   - [ ] Budget `films` se spend capem na Cloud Run a e-mailovými alerty
   - [x] Pojistky ve scraperu (`max_runtime_minutes`, circuit breaker) (krok 1.5)
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
@@ -468,5 +468,168 @@ gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy --loc
   ```
   Pozor na Windows PowerShell 5.1: při posílání souboru do `bq` přes `|` přidá BOM a dotaz selže na „Illegal input character \357“. Je potřeba použít přesměrování přes `cmd /c "bq query ... < soubor.sql"`.
 - **Ověření** (2026-10-26): `full` 15 290 filmů a `weekly` 5 407 filmů, přesně podle manifestů. Vnořená pole (`credits`, `release_dates`, `_sources`) se načítají a znaky U+2028 v textech BigQuery nevadí.
+
+### Krok 1.9 – Silver: čištění a filtr kvality
+
+View `silver.movies` (`sql/02_silver_movies.sql`) čte z `bronze` poslední úplný běh a čistí ho podle pravidel v sekci Rozhodnutí. Je to jen uložený dotaz, nic se nekopíruje.
+```bash
+cmd /c "bq query --use_legacy_sql=false --location=us-central1 < sql\02_silver_movies.sql"
+```
+
+Postup čištění:
+
+**1. Výběr řádků**
+| Pravidlo | Proč |
+|---|---|
+| jen poslední úplný běh (má `manifest.json`, nejnovější `run`) | starší běhy jsou historie (půjdou do `gold.movie_snapshots`) |
+| jen řádky z `details/` (`_FILE_NAME`) | maska `*.jsonl` zachytí i `lists/` |
+| každý film jednou (`id`, nejnovější `_fetched_at`) | ochrana proti duplicitám |
+
+**2. Filtr kvality** (jediné místo, kde se zahazují celé filmy)
+| Zdroj | Pravidlo |
+|---|---|
+| Top 10k | projde vždy, bez filtru (EDA: min. 300 hlasů, popis a plakát skoro všude) |
+| Kina a novinky | zůstane jen film s **popisem** a **plakátem** a s `runtime ≥ 40` nebo **neznámou délkou** (chystané filmy délku často nemají) |
+
+**3. Oprava hodnot**
+| Sloupec | Před (bronze) | Po (silver) | Proč |
+|---|---|---|---|
+| `budget`, `revenue` | `0` | `NULL` | TMDB hodnotu nezná, nejde o nulu |
+| `runtime` | `0` | `NULL` | neznámá délka |
+| `vote_average` | `0` při 0 hlasech | `NULL` | film bez hlasů nemá hodnocení 0 |
+| `overview`, `tagline`, `homepage` | prázdný text | `NULL` | chybí |
+| `release_date` | text, může být prázdný | `DATE`, prázdný → `NULL` | filtrování podle data |
+
+**4. Zjednodušení struktury** (z vnořeného JSON na čitelné sloupce)
+| Před (bronze) | Po (silver) |
+|---|---|
+| `poster_path` `/abc.jpg` | `poster_url` `https://image.tmdb.org/t/p/w500/abc.jpg` |
+| `genres`, `keywords`, `production_companies` `[{id, name}]` | seznamy jmen `["Drama", "Crime"]` |
+| `production_countries`, `spoken_languages` | seznamy kódů zemí / názvů jazyků |
+| `belongs_to_collection` `{id, name, …}` | `collection` (název) |
+| `credits.crew` | `directors`, `writers`, `producers`, `cinematographers`, `composers`, `editors` (všichni lidé v roli, bez duplicit) |
+| `credits.cast` (20 herců, 12 polí) | `top_cast` `[{name, character, order}]` v pořadí titulků |
+| `release_dates` (všechny země a typy vydání) | `release_date_cz`, `release_date_us` (jen kino premiéra, typ 2 a 3) |
+| `_sources` | `sources` + příznaky `is_top_rated`, `in_cinema_us/cz`, `upcoming_us/cz`, `is_new_release` |
+| `mode`, `run`, `_fetched_at` | `run_mode`, `run`, `run_at`, `fetched_at` (odkud řádek je) |
+| `adult`, `backdrop_path` | vynechány |
+
+**5. Kontroly po každé změně SQL**
+- žádné `0` v `budget`, `runtime` a `vote_average` (vše převedeno na `NULL`),
+- žádné duplicity `id`,
+- počty filmů v bronze a silver podle zdroje (kolik vyřadil filtr kvality),
+- ukázka několika řádků (např. `WHERE in_cinema_cz`).
+
+### Krok 1.10 – Gold: katalog a historie
+
+**Tabulky** (`sql/03_gold_tables.sql`, vytvoří se jednou přes `CREATE TABLE IF NOT EXISTS`, schéma se bere ze `silver.movies`):
+| Tabulka | Obsah | Uspořádání |
+|---|---|---|
+| `gold.movies` | 1 řádek na film, aktuální stav. Sloupce jako `silver.movies` (bez `sources` a informací o běhu) + `in_catalog`, `first_seen_at`, `last_seen_at`, `updated_at` | clustered by `id` |
+| `gold.movie_snapshots` | 1 řádek na film a běh: stav, data premiér, hodnocení, hlasy, popularita, zdroje | partitioned by `DATE(run_at)`, clustered by `id` |
+
+**Načtení** (`sql/04_gold_load.sql`, spouští se po každém běhu scraperu) dělá dva kroky:
+1. **Snapshot:** `INSERT` všech filmů ze `silver.movies` do `movie_snapshots`, ale jen pokud tento běh (`run`) ještě není vložený.
+2. **Katalog:** `MERGE` do `movies` podle `id`:
+   | Případ | Co se stane |
+   |---|---|
+   | film je v běhu i v katalogu | přepíší se všechny údaje, `last_seen_at` = čas běhu, `in_catalog = TRUE`. `is_top_rated` se mění jen při běhu `full` |
+   | film je v běhu, ale ne v katalogu (nový) | vloží se, `first_seen_at` = `last_seen_at` = čas běhu |
+   | film je v katalogu, ale ne v běhu | nemaže se. Vypnou se příznaky kin a novinek, po běhu `full` i `is_top_rated`. `in_catalog` zůstane jen filmům, které jsou dál v top 10k |
+
+`first_seen_at` se nastaví jen při vložení a nikdy se nepřepisuje. Z něj jdou počítat „novinky v měsíci“ i zpětně.
+
+```bash
+cmd /c "bq query --use_legacy_sql=false --location=us-central1 < sql\03_gold_tables.sql"
+cmd /c "bq query --use_legacy_sql=false --location=us-central1 < sql\04_gold_load.sql"
+```
+
+**Kontroly:**
+- počet filmů v `gold.movies` = počet v `silver.movies`, žádné duplicity `id`, žádné chybějící `first_seen_at` a `last_seen_at`,
+- **idempotence:** druhé spuštění `04_gold_load.sql` pro stejný běh vloží 0 snapshotů a katalog se nezmění (ověřeno 2026-10-26),
+- první načtení proběhlo z běhu `full` `2026-10-26T13-59-56Z`. Starší běh `weekly` (13:54) se nenačítal, protože silver bere jen poslední běh.
+
+### Krok 1.11 – Automatizace: Scheduler a Scheduled Query
+
+```mermaid
+flowchart LR
+    subgraph SCHED["⏰ Cloud Scheduler (Europe/Prague)"]
+        W["films-scraper-weekly<br/>po 03:00<br/>MODE=weekly"]
+        M["films-scraper-monthly<br/>1. den v měsíci 04:00<br/>MODE=full"]
+    end
+    JOB["Cloud Run Job<br/>films-scraper"]
+    TMDB["TMDB API"]
+    GCS[("GCS films-512811-raw<br/>tmdb/mode=…/run=…/")]
+    subgraph BQ["🗄️ BigQuery"]
+        BR["bronze<br/>tmdb_details, tmdb_manifests<br/>(external)"]
+        SI["silver.movies<br/>(view, čištění)"]
+        SQ["Scheduled Query gold-load<br/>každý den 06:00 UTC<br/>sql/04_gold_load.sql"]
+        GO[("gold.movies<br/>gold.movie_snapshots")]
+    end
+
+    W -- "SA films-scheduler" --> JOB
+    M -- "SA films-scheduler" --> JOB
+    JOB <--> TMDB
+    JOB --> GCS
+    GCS --> BR --> SI --> SQ
+    SQ -- "SA films-bq-loader<br/>jen nový běh" --> GO
+
+    classDef sched fill:#FFF3E0,stroke:#EF6C00,color:#E65100
+    classDef run fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
+    classDef ext fill:#F3E5F5,stroke:#6A1B9A,color:#4A148C
+    classDef store fill:#FFFDE7,stroke:#F9A825,color:#5D4037
+    classDef bq fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
+    class W,M sched
+    class JOB run
+    class TMDB ext
+    class GCS store
+    class BR,SI,SQ,GO bq
+```
+
+**Cloud Scheduler** volá Cloud Run API `jobs/films-scraper:run` a předává `MODE` (`containerOverrides`):
+| Plán | Kdy | Režim |
+|---|---|---|
+| `films-scraper-weekly` | každé pondělí 03:00 (Europe/Prague) | `weekly`: kina a novinky |
+| `films-scraper-monthly` | 1. den v měsíci 04:00 (Europe/Prague) | `full`: top 10k, kina a novinky |
+
+Když 1. den v měsíci připadne na pondělí, proběhnou oba. Nevadí to, gold vezme poslední (měsíční) běh.
+
+**Scheduled Query `gold-load`** spouští `sql/04_gold_load.sql` **každý den v 06:00 UTC**. Spuštění „až doběhne scraper“ BigQuery neumí, jde jen podle času. Skript proto nejdřív v malé tabulce `bronze.tmdb_manifests` zjistí poslední úplný běh. Když už je v `gold.movie_snapshots`, hned skončí. Gold se tak aktualizuje nejpozději den po každém běhu scraperu, i když scraper poběží v jiný čas, a mezitím se nic zbytečně nepřepisuje.
+
+**Service accounty (minimální práva):**
+| Účet | Smí | Práva |
+|---|---|---|
+| `films-scheduler` | jen spustit scraper s přepsanými proměnnými | `roles/run.jobsExecutorWithOverrides` na jobu `films-scraper` |
+| `films-bq-loader` | číst bronze, silver a raw bucket, zapisovat do gold | `roles/bigquery.jobUser` (projekt), READER na `bronze` a `silver`, WRITER na `gold`, `roles/storage.objectViewer` na `films-512811-raw` |
+
+Service agent BigQuery Data Transfer má na `films-bq-loader` roli `roles/iam.serviceAccountTokenCreator`, aby pod ním mohl Scheduled Query spouštět. Práva na datasetech se nastavují přes jejich přístupový seznam (`bq show --format=prettyjson` → úprava `access` → `bq update --source`). Příkaz `bq add-iam-policy-binding` u datasetů nefunguje.
+
+```bash
+gcloud services enable cloudscheduler.googleapis.com bigquerydatatransfer.googleapis.com
+gcloud iam service-accounts create films-scheduler
+gcloud run jobs add-iam-policy-binding films-scraper --region us-central1 \
+  --member=serviceAccount:films-scheduler@films-512811.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides
+# body.json: {"overrides":{"containerOverrides":[{"env":[{"name":"MODE","value":"weekly"}]}]}}
+gcloud scheduler jobs create http films-scraper-weekly --location us-central1 \
+  --schedule "0 3 * * 1" --time-zone "Europe/Prague" --http-method POST \
+  --uri "https://run.googleapis.com/v2/projects/films-512811/locations/us-central1/jobs/films-scraper:run" \
+  --headers "Content-Type=application/json" --message-body-from-file body.json \
+  --oauth-service-account-email films-scheduler@films-512811.iam.gserviceaccount.com
+# (films-scraper-monthly stejně: "0 4 1 * *", MODE=full)
+bq mk --transfer_config --project_id=films-512811 --location=us-central1 --data_source=scheduled_query \
+  --display_name=gold-load --schedule="every day 06:00" \
+  --service_account_name=films-bq-loader@films-512811.iam.gserviceaccount.com \
+  --params='{"query": "<obsah sql/04_gold_load.sql>"}'
+```
+
+**Ruční spuštění** (například pro test):
+```bash
+gcloud scheduler jobs run films-scraper-weekly --location us-central1
+bq mk --transfer_run --run_time=<teď v UTC> projects/188138853287/locations/us-central1/transferConfigs/6ae199c0-0000-20a5-a5df-883d24f5f58c
+```
+
+**Test celého cyklu (2026-10-26):** ruční spuštění `films-scraper-weekly` → scraper s `MODE=weekly` (běh `2026-10-26T15-20-14Z`) → ruční spuštění `gold-load` → `SUCCEEDED`. V `gold.movie_snapshots` jsou 2 běhy, týdenní běh aktualizoval `last_seen_at` a `is_top_rated` zůstal beze změny, protože týdenní běh top 10k nemění. Opakované spuštění pro už načtený běh skončí hláškou „already loaded, nothing to do“.
+
+Pozor: `sql/04_gold_load.sql` je do Scheduled Query zkopírovaný. Po změně souboru je potřeba Scheduled Query aktualizovat (`bq update --transfer_config --params=…`), jinak poběží stará verze.
 
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
