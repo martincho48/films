@@ -86,6 +86,24 @@ Sem se zapisují jen kroky, které jsou skutečně hotové a ověřené.
   ```
   Instaluje se do `%LOCALAPPDATA%\Google\Cloud SDK\google-cloud-sdk\bin`. Po instalaci je potřeba úplně restartovat VS Code (ne jen otevřít nový terminál), aby se načetl `PATH`.
 
+### Krok 0.3 – Lokální venv `uv_films`
+
+Venv je mimo repo v `C:\Users\mabilek\uv_all_venvs\uv_films` (Python 3.12.10). Závislosti jsou v `pyproject.toml` a `uv.lock`. Slouží jen pro lokální práci (EDA, později Streamlit). Cloud Run Job ho nepoužívá, má vlastní `scraper/requirements.txt` v Docker image.
+
+```powershell
+uv venv C:\Users\mabilek\uv_all_venvs\uv_films --python 3.12
+$env:UV_PROJECT_ENVIRONMENT = "C:\Users\mabilek\uv_all_venvs\uv_films"
+uv init --bare --name films --python 3.12
+uv add pandas pyarrow matplotlib ipykernel
+```
+
+`uv` jinak instaluje do `.venv` ve složce projektu. Proto se v každém novém terminálu nastaví `UV_PROJECT_ENVIRONMENT` (případně se venv aktivuje a použije `uv add --active` nebo `uv sync --active`):
+```powershell
+$env:UV_PROJECT_ENVIRONMENT = "C:\Users\mabilek\uv_all_venvs\uv_films"
+uv sync
+```
+Ve VS Code se jako interpreter i kernel pro notebook vybere `C:\Users\mabilek\uv_all_venvs\uv_films\Scripts\python.exe`.
+
 ### Krok 0.2 – GCP projekt
 
 - Projekt: `films-512811` (číslo projektu `188138853287`), billing je napojený.
