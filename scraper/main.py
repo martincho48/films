@@ -1,17 +1,22 @@
 """TMDB scraper for Cloud Run Job.
 
-Full monthly download of the TMDB catalog for the configured countries.
-All filters and trimming rules are in config.toml (see comments there).
+Downloads films from three sources, merges them by id and fetches the detail
+of every film. All sources, filters and trimming rules are in config.toml.
 
-1. /discover/movie per country over the whole release-date range. A range with
-   more results than TMDB returns (10 000) is split in half until it fits.
-2. /movie/{id}?append_to_response=credits,keywords for every unique film,
-   credits trimmed to top N cast and selected crew jobs, everything else as is.
-3. Output to GCS, uploaded continuously in parts:
+    top_rated      /movie/top_rated (global top 10k)               mode full
+    cinema         /movie/now_playing + /movie/upcoming per region  modes full, weekly
+    new_releases   /discover/movie per origin country,              modes full, weekly
+                   release date in [today - days_back, today + days_ahead]
 
-    gs://<BUCKET>/raw/tmdb/dt=YYYY-MM-DD/run=YYYY-MM-DDTHH-MM-SSZ/
-        lists/part-0001.jsonl      # raw discover pages + query that produced them
-        details/part-0001.jsonl    # one trimmed movie detail per line, plus _fetched_at
+Detail: /movie/{id}?append_to_response=credits,keywords,release_dates,
+credits trimmed to top N cast and selected crew jobs, everything else as is,
+plus _sources (which lists the film came from) and _fetched_at.
+
+Output to GCS, uploaded continuously in parts:
+
+    gs://<BUCKET>/tmdb/mode=full|weekly/run=YYYY-MM-DDTHH-MM-SSZ/
+        lists/part-0001.jsonl      # raw list pages + source and query that produced them
+        details/part-0001.jsonl    # one trimmed movie detail per line
         manifest.json              # written last = run is complete
 
    key=value folders are read by BigQuery as columns (hive partitioning).
@@ -19,8 +24,8 @@ All filters and trimming rules are in config.toml (see comments there).
 Environment variables:
     TMDB_TOKEN        TMDB API Read Access Token (injected from Secret Manager)
     BUCKET            target GCS bucket name
-    COUNTRIES, YEAR_FROM, YEAR_TO, MIN_RUNTIME, CAST_TOP_N, MAX_MOVIES
-                      optional overrides of config.toml for test runs
+    MODE              full | weekly (default weekly)
+    MAX_MOVIES, TOP_RATED_PAGES   optional limits for test runs
 """
 
 import gzip
@@ -47,20 +52,19 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stre
 log = logging.getLogger("tmdb-scraper")
 
 
+class SafetyStop(RuntimeError):
+    """Raised by a safety limit; the run ends without manifest.json."""
+
+
 def load_config() -> dict:
     cfg = tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    disc, trim = cfg["discover"], cfg["trim"]
+    cfg["mode"] = os.getenv("MODE", "weekly")
+    if cfg["mode"] not in cfg["modes"]:
+        raise ValueError(f"unknown MODE {cfg['mode']!r}, expected one of {list(cfg['modes'])}")
 
-    # Optional overrides for test runs
-    if os.getenv("COUNTRIES"):
-        disc["countries"] = [c.strip().upper() for c in os.environ["COUNTRIES"].split(",") if c.strip()]
-    if os.getenv("YEAR_FROM"):
-        disc["year_from"] = int(os.environ["YEAR_FROM"])
-    disc["year_to"] = int(os.getenv("YEAR_TO", date.today().year + disc["years_ahead"]))
-    if os.getenv("MIN_RUNTIME"):
-        disc["min_runtime"] = int(os.environ["MIN_RUNTIME"])
-    if os.getenv("CAST_TOP_N"):
-        trim["cast_top_n"] = int(os.environ["CAST_TOP_N"])
+    # Optional limits for test runs
+    if os.getenv("TOP_RATED_PAGES"):
+        cfg["top_rated"]["pages"] = int(os.environ["TOP_RATED_PAGES"])
     cfg["max_movies"] = int(os.getenv("MAX_MOVIES", "0")) or None
     return cfg
 
@@ -82,11 +86,12 @@ class RateLimiter:
 
 
 class TmdbClient:
-    """Thin TMDB client, one requests.Session per thread, shared rate limit."""
+    """Thin TMDB client, one requests.Session per thread, shared rate limit and deadline."""
 
-    def __init__(self, token: str, limiter: RateLimiter):
+    def __init__(self, token: str, limiter: RateLimiter, deadline: float):
         self.token = token
         self.limiter = limiter
+        self.deadline = deadline
         self._local = threading.local()
 
     def _session(self) -> requests.Session:
@@ -106,6 +111,8 @@ class TmdbClient:
         return self._local.session
 
     def get(self, path: str, params: dict) -> dict:
+        if time.monotonic() > self.deadline:
+            raise SafetyStop("max_runtime_minutes exceeded")
         self.limiter.wait()
         response = self._session().get(f"{BASE_URL}{path}", params=params, timeout=30)
         response.raise_for_status()
@@ -140,14 +147,42 @@ class PartWriter:
         self.lines = []
 
 
-def discover_range(client, cfg, country, start, end, lists, segments) -> list[int]:
-    """All film ids for a country in [start, end]; splits the range while over the TMDB limit."""
-    disc = cfg["discover"]
+class Collector:
+    """Film ids from all list sources, with the source tags each film came from."""
+
+    def __init__(self, lists: PartWriter):
+        self.lists = lists
+        self.sources: dict[int, list[str]] = {}
+        self.per_source: dict[str, int] = {}
+
+    def add_page(self, tag: str, query: dict, data: dict) -> None:
+        self.lists.add({"source": tag, "query": query, "response": data})
+        for movie in data.get("results", []):
+            tags = self.sources.setdefault(movie["id"], [])
+            if tag not in tags:
+                tags.append(tag)
+                self.per_source[tag] = self.per_source.get(tag, 0) + 1
+
+
+def fetch_pages(client, collector, tag, path, params, max_pages) -> None:
+    """All pages of a list endpoint (up to max_pages and the TMDB limit of 500)."""
+    page, total_pages = 1, 1
+    while page <= min(total_pages, max_pages, 500):
+        query = {**params, "page": page}
+        data = client.get(path, query)
+        collector.add_page(tag, query, data)
+        total_pages = data.get("total_pages", 0)
+        page += 1
+    log.info("%s: %d films, %d pages", tag, collector.per_source.get(tag, 0), page - 1)
+
+
+def discover_range(client, cfg, collector, country, start, end, segments) -> None:
+    """New releases of one origin country in [start, end]; splits the range while over the TMDB limit."""
+    nr = cfg["new_releases"]
     params = {
-        "language": disc["language"],
-        "include_adult": str(disc["include_adult"]).lower(),
-        "include_video": str(disc["include_video"]).lower(),
-        "with_runtime.gte": disc["min_runtime"],
+        "language": cfg["api"]["language"],
+        "include_adult": str(nr["include_adult"]).lower(),
+        "include_video": str(nr["include_video"]).lower(),
         "with_origin_country": country,
         "primary_release_date.gte": start.isoformat(),
         "primary_release_date.lte": end.isoformat(),
@@ -159,22 +194,18 @@ def discover_range(client, cfg, country, start, end, lists, segments) -> list[in
 
     if total > limit and start < end:
         mid = start + timedelta(days=(end - start).days // 2)
-        return (discover_range(client, cfg, country, start, mid, lists, segments)
-                + discover_range(client, cfg, country, mid + timedelta(days=1), end, lists, segments))
+        discover_range(client, cfg, collector, country, start, mid, segments)
+        discover_range(client, cfg, collector, country, mid + timedelta(days=1), end, segments)
+        return
     if total > limit:
         log.warning("%s %s: %d results in a single day, only first %d downloaded", country, start, total, limit)
 
-    ids = []
+    tag = f"new_release:{country}"
     pages = min(first["total_pages"], limit // 20)
     for page in range(1, pages + 1):
         data = first if page == 1 else client.get("/discover/movie", {**params, "page": page})
-        lists.add({"country": country, "query": {**params, "page": page}, "response": data})
-        ids.extend(m["id"] for m in data.get("results", []))
-
+        collector.add_page(tag, {**params, "page": page}, data)
     segments.append({"country": country, "from": start.isoformat(), "to": end.isoformat(), "total_results": total})
-    if total:
-        log.info("%s %s..%s: %d films, %d pages", country, start, end, total, pages)
-    return ids
 
 
 def trim_credits(movie: dict, trim: dict) -> dict:
@@ -185,38 +216,56 @@ def trim_credits(movie: dict, trim: dict) -> dict:
     return {**movie, "credits": {"cast": cast, "crew": crew}}
 
 
-def fetch_detail(client: TmdbClient, movie_id: int, cfg: dict) -> dict:
+def fetch_detail(client: TmdbClient, movie_id: int, sources: list[str], cfg: dict) -> dict:
     data = client.get(
         f"/movie/{movie_id}",
-        {"language": cfg["discover"]["language"], "append_to_response": "credits,keywords"},
+        {"language": cfg["api"]["language"], "append_to_response": cfg["api"]["append_to_response"]},
     )
-    return {**trim_credits(data, cfg["trim"]), "_fetched_at": datetime.now(timezone.utc).isoformat()}
+    return {
+        **trim_credits(data, cfg["trim"]),
+        "_sources": sources,
+        "_fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def main() -> None:
     cfg = load_config()
-    disc, out = cfg["discover"], cfg["output"]
-    client = TmdbClient(os.environ["TMDB_TOKEN"].strip(), RateLimiter(cfg["api"]["max_requests_per_second"]))
+    mode, out, api = cfg["mode"], cfg["output"], cfg["api"]
+    sources_enabled = cfg["modes"][mode]
+
+    deadline = time.monotonic() + cfg["safety"]["max_runtime_minutes"] * 60
+    client = TmdbClient(os.environ["TMDB_TOKEN"].strip(), RateLimiter(api["max_requests_per_second"]), deadline)
     bucket = storage.Client().bucket(os.environ["BUCKET"])
 
     started = datetime.now(timezone.utc)
-    run_prefix = f"{out['prefix']}/dt={started:%Y-%m-%d}/run={started:%Y-%m-%dT%H-%M-%SZ}"
-    log.info("run %s | countries %s | years %d..%d", run_prefix, ",".join(disc["countries"]), disc["year_from"], disc["year_to"])
+    run_prefix = f"{out['prefix']}/mode={mode}/run={started:%Y-%m-%dT%H-%M-%SZ}"
+    log.info("run %s | sources %s", run_prefix, ",".join(sources_enabled))
 
-    # 1. Lists: all film ids per country
+    # 1. Lists from all enabled sources
     lists = PartWriter(bucket, f"{run_prefix}/lists", out["list_pages_per_part"], out["gzip"])
+    collector = Collector(lists)
     segments: list[dict] = []
-    per_country: dict[str, int] = {}
-    movie_ids: list[int] = []
-    for country in disc["countries"]:
-        ids = discover_range(client, cfg, country, date(disc["year_from"], 1, 1), date(disc["year_to"], 12, 31), lists, segments)
-        per_country[country] = len(set(ids))
-        movie_ids.extend(ids)
-        log.info("%s: %d films", country, per_country[country])
+
+    if "top_rated" in sources_enabled:
+        fetch_pages(client, collector, "top_rated", "/movie/top_rated",
+                    {"language": api["language"]}, cfg["top_rated"]["pages"])
+
+    if "cinema" in sources_enabled:
+        for region in cfg["cinema"]["regions"]:
+            for kind in ("now_playing", "upcoming"):
+                fetch_pages(client, collector, f"{kind}:{region}", f"/movie/{kind}",
+                            {"language": api["language"], "region": region}, 500)
+
+    if "new_releases" in sources_enabled:
+        nr = cfg["new_releases"]
+        today = started.date()
+        start, end = today - timedelta(days=nr["days_back"]), today + timedelta(days=nr["days_ahead"])
+        for country in nr["countries"]:
+            discover_range(client, cfg, collector, country, start, end, segments)
+            log.info("new_release:%s: %d films", country, collector.per_source.get(f"new_release:{country}", 0))
     lists.flush()
 
-    # Unique ids across countries (co-productions), keep first-seen order
-    movie_ids = list(dict.fromkeys(movie_ids))
+    movie_ids = list(collector.sources)
     if cfg["max_movies"]:
         movie_ids = movie_ids[: cfg["max_movies"]]
     log.info("unique films for details: %d", len(movie_ids))
@@ -224,32 +273,41 @@ def main() -> None:
     # 2. Details in parallel, uploaded in parts
     details = PartWriter(bucket, f"{run_prefix}/details", out["details_per_part"], out["gzip"])
     failures = []
-    with ThreadPoolExecutor(max_workers=cfg["api"]["workers"]) as pool:
-        futures = {pool.submit(fetch_detail, client, movie_id, cfg): movie_id for movie_id in movie_ids}
+    consecutive_failures = 0
+    pool = ThreadPoolExecutor(max_workers=api["workers"])
+    futures = {pool.submit(fetch_detail, client, mid, collector.sources[mid], cfg): mid for mid in movie_ids}
+    try:
         for done, future in enumerate(as_completed(futures), start=1):
             try:
                 details.add(future.result())
+                consecutive_failures = 0
             except requests.RequestException as err:
                 # Skip failed film, never reuse data from another film
                 log.warning("movie %s failed: %s", futures[future], err)
                 failures.append({"id": futures[future], "error": str(err)})
+                consecutive_failures += 1
+                if consecutive_failures >= cfg["safety"]["max_consecutive_failures"]:
+                    raise SafetyStop(f"{consecutive_failures} consecutive detail failures")
             if done % 1000 == 0:
                 log.info("details %d/%d", done, len(movie_ids))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     details.flush()
 
     # 3. Manifest last: its presence marks the run as complete
     finished = datetime.now(timezone.utc)
     manifest = {
+        "mode": mode,
         "started_at": started.isoformat(),
         "finished_at": finished.isoformat(),
         "duration_s": round((finished - started).total_seconds()),
         "config": cfg,
-        "films_per_country": per_country,
+        "films_per_source": collector.per_source,
         "unique_movie_ids": len(movie_ids),
         "list_pages": lists.count,
         "details_ok": details.count,
         "details_failed": failures,
-        "segments": segments,
+        "new_release_segments": segments,
         "files": lists.files + details.files,
     }
     bucket.blob(f"{run_prefix}/manifest.json").upload_from_string(
@@ -259,4 +317,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SafetyStop as err:
+        log.error("safety stop: %s (run left without manifest.json)", err)
+        sys.exit(1)

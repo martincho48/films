@@ -1,22 +1,30 @@
 # Konfigurace TMDB scraperu.
 # Změna = úprava tohoto souboru + nové nasazení jobu (gcloud run jobs deploy).
 # Celá konfigurace se ukládá do manifest.json každého běhu.
-# Pro jednorázový test jde přepsat proměnnými prostředí:
-#   COUNTRIES=CZ,SK  YEAR_FROM=2024  YEAR_TO=2024  MAX_MOVIES=50
+# Proměnné prostředí: MODE=full|weekly (výchozí weekly),
+#   pro testy MAX_MOVIES=50, TOP_RATED_PAGES=5
 
-[discover]                       # KTERÉ FILMY se stahují (filtry přímo v TMDB API)
-countries = [                    # země původu filmu (ISO 3166-1), pole origin_country
+[modes]                          # KTERÉ ZDROJE se stahují v kterém režimu
+full = ["top_rated", "cinema", "new_releases"]    # 1x měsíčně
+weekly = ["cinema", "new_releases"]               # 1x týdně
+
+[top_rated]                      # TOP 10K: hotový žebříček TMDB (globální)
+pages = 500                      # 500 stránek x 20 = 10 000 filmů (max. TMDB)
+
+[cinema]                         # KINA: co běží a co přijde (všechny filmy, které tam hrají)
+regions = ["US", "CZ"]           # země kin (ISO 3166-1)
+
+[new_releases]                   # NOVINKY: nově vydané a chystané filmy z vybraných zemí
+countries = [                    # země původu filmu (pole origin_country)
   "US", "GB", "CA", "AU", "IE", "NZ",                                           # anglofonní
   "CZ", "SK",                                                                   # Česko a Slovensko
   "FR", "DE", "IT", "ES", "BE", "NL", "AT", "CH", "DK", "SE", "NO", "FI", "PL",  # západní a severní Evropa
-  "KR", "JP", "CN", "HK", "IN",                                                 # Asie
+  "KR", "JP",                                                                   # Asie
 ]
-min_runtime = 40                 # minuty; vyřadí i filmy s neznámou délkou
+days_back = 30                   # premiéra od dneška - N dní
+days_ahead = 90                  # premiéra do dneška + N dní
 include_adult = false
 include_video = false
-year_from = 1920                # od kterého roku vydání stahovat filmy (filtr v API)
-years_ahead = 2                  # kolik let dopředu (oznámené budoucí filmy)
-language = "en-US"               # jazyk textů (název, popis, žánry), NEfiltruje filmy
 
 [trim]                           # CO SE Z FILMU ULOŽÍ (oříznutí credits, zbytek beze změny)
 cast_top_n = 20                  # prvních N herců podle pořadí v titulcích (order)
@@ -31,12 +39,18 @@ crew_jobs = [                    # role štábu, které se ponechají (všichni 
 ]
 
 [output]                         # JAK SE UKLÁDÁ
-prefix = "raw/tmdb"              # složka v bucketu
+prefix = "tmdb"                  # složka v bucketu
 details_per_part = 1000          # filmů v jednom souboru details/part-*.jsonl
 list_pages_per_part = 500        # stránek seznamu v jednom souboru lists/part-*.jsonl
 gzip = false                     # true = .jsonl.gz (BigQuery čte přímo)
 
 [api]                            # CHOVÁNÍ VŮČI TMDB API
+language = "en-US"               # jazyk textů (název, popis, žánry), NEfiltruje filmy
+append_to_response = "credits,keywords,release_dates"
 workers = 8                      # paralelní stahování detailů
 max_requests_per_second = 30     # strop pro všechna vlákna dohromady (TMDB limit je vyšší)
 max_results_per_query = 10000    # limit TMDB (500 stránek x 20); větší rozsah se dělí
+
+[safety]                         # POJISTKY: běh se ukončí BEZ manifest.json (= neúplný)
+max_runtime_minutes = 120        # maximální délka běhu
+max_consecutive_failures = 50    # tolik chyb detailu za sebou = TMDB nefunguje

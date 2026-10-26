@@ -46,31 +46,53 @@ GitHub push ──► GitHub Actions ──► build image ──► deploy na C
   - Schéma BigQuery, scraper i aplikace jsou v jednom repu, takže změna schématu je v jednom commitu.
   - Přihlášení GitHub Actions do GCP (Workload Identity Federation) se nastaví jednou pro celé repo.
   - Za běhu má každá část vlastní service account s minimálními právy: `films-scraper` (secret TMDB, zápis do bucketu) a `films-app` (čtení z BigQuery, Vertex AI). Aplikace k TMDB tokenu přístup nemá.
-- **Strategie scrapingu: každý měsíc plné stažení katalogu.** S filtry a oříznutím vychází zhruba 12 kB na film, takže plné stažení je levné a jednodušší než přírůstky. Smazané filmy, opravy chyb i změny nastavení se projeví samy.
-  - **Filtry přímo v API** (`/discover/movie`): `include_adult=false`, `include_video=false`, `with_runtime.gte=40` (oficiální hranice celovečerního filmu podle AMPAS a BFI; vyřadí i filmy s neznámou délkou), `with_origin_country` podle seznamu zemí a `primary_release_date` od roku 1920 (`year_from`) do aktuálního roku + 2 (`years_ahead`). Stahují se **všechny filmy** z vybraných zemí bez prahu `vote_count`. Méně známé filmy se filtrují až v BigQuery nebo v aplikaci podle `vote_count`. Katalog se prochází po zemích a letech (TMDB vrací nejvýš 500 stránek, tedy 10 000 filmů na dotaz). Rok, který se do limitu nevejde, se dělí na měsíce. Duplicity se sloučí podle `id`. Jazyk se nefiltruje, `original_language` zůstává jako sloupec.
-  - **Výchozí seznam zemí (26):** `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP, CN, HK, IN`. Dá se kdykoli změnit a další měsíční běh se tomu přizpůsobí.
-  - **Všechny parametry jsou v `scraper/config.toml`** (v repu, s komentáři), rozdělené na `[discover]` (které filmy), `[trim]` (co z filmu uložit) a `[output]` (jak ukládat). Změna = úprava souboru a nové nasazení jobu. Celá konfigurace se kopíruje do `manifest.json` každého běhu. Pro jednorázové testy jde parametr přepsat proměnnou prostředí (například `COUNTRIES=CZ`).
-  - **Oříznutí `credits` už ve scraperu**, všechno ostatní zůstane, jak to TMDB vrátilo: cast prvních 20 herců podle `order`, crew jen klíčové role (Director, Writer, Screenplay, Novel, Story, Producer, Executive Producer, Director of Photography, Original Music Composer, Editor, Casting) se všemi lidmi v roli. Pravidla oříznutí se zapisují do `manifest.json` každého běhu.
+- **Strategie scrapingu: tři zdroje filmů a vždy plné stažení.** Původní plán (všechny filmy z vybraných zemí přes `discover`) se ukázal jako příliš velký: jen US od roku 1920 má přes 100 tisíc filmů, celkem odhadem 350–450 tisíc, většinou bez hlasů. Starý projekt pracoval s ~10 tisíci (Kaggle top 10k a upcoming). Nově se stahují tři zdroje, sloučí se podle `id` a ke každému filmu se stáhne detail:
+
+  | Zdroj | Endpoint | Filtr | Režim |
+  |---|---|---|---|
+  | **Top 10k** | `/movie/top_rated`, 500 stránek | globální, řazení a práh hlasů určuje TMDB | `full` (1× měsíčně) |
+  | **Kina** | `/movie/now_playing` a `/movie/upcoming` | `region` = US, CZ, všechny filmy, které tam hrají | `full` i `weekly` (1× týdně) |
+  | **Novinky** | `/discover/movie` | premiéra −30 až +90 dní, `with_origin_country` = 23 zemí, bez adult a video | `full` i `weekly` |
+  | Detail | `/movie/{id}?append_to_response=credits,keywords,release_dates` | ke každému filmu ze zdrojů výše | s každým během |
+
+  - **Top 10k se mění pomalu** (hlasování uživatelů TMDB, nové filmy se do něj dostanou po měsících), proto stačí měsíčně. Kina a novinky se mění každý týden.
+  - **Země pro novinky (23):** `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP`. CN, IN a HK jsou vyřazené kvůli obrovské lokální produkci. Jejich světově známé filmy zachytí top 10k nebo kina v US.
+  - **`release_dates`** obsahuje datum premiéry pro každou zemi a typ vydání (kino, digitál, TV), takže je známé, kdy film přijde do kin v ČR.
+  - Každý detail má `_sources`, tedy ze kterých zdrojů film přišel (například `top_rated`, `now_playing:US`, `upcoming:CZ`, `new_release:FR`), a `_fetched_at`.
+  - **Filtry ze starého projektu** (`runtime ≥ 40`, převod `0` a prázdných hodnot na `NULL`) se uplatní až při čištění v BigQuery. V raw zůstává všechno, co zdroje vrátily.
+  - **Všechny parametry jsou v `scraper/config.toml`** (v repu, s komentáři): zdroje a režimy, regiony kin, země a okno novinek, oříznutí, výstup, API a pojistky. Změna = úprava souboru a nové nasazení jobu. Celá konfigurace se kopíruje do `manifest.json` každého běhu. Režim a testovací limity se nastavují proměnnými prostředí (`MODE`, `MAX_MOVIES`, `TOP_RATED_PAGES`).
+  - **Oříznutí `credits` už ve scraperu**, všechno ostatní zůstane, jak to TMDB vrátilo: cast prvních 20 herců podle `order`, crew jen klíčové role (Director, Writer, Screenplay, Novel, Story, Producer, Executive Producer, Director of Photography, Original Music Composer, Editor, Casting) se všemi lidmi v roli.
   - **Scraper je nezávislý na BigQuery.** Jen stahuje do GCS a nic nečte ani nezapisuje do BigQuery.
 - **Raw bucket: každý běh má vlastní složku a ukládá se po částech.**
   ```
-  raw/tmdb/dt=YYYY-MM-DD/run=YYYY-MM-DDTHH-MM-SSZ/
-      lists/part-0001.jsonl      # surové stránky seznamů
-      details/part-0001.jsonl    # max. 1 000 filmů na část, nahrává se průběžně
-      manifest.json              # zapisuje se jako poslední = běh je úplný
+  films-512811-raw/
+  └── tmdb/                                   # zdroj dat (místo pro případné další zdroje)
+      ├── mode=full/run=YYYY-MM-DDTHH-MM-SSZ/
+      └── mode=weekly/run=YYYY-MM-DDTHH-MM-SSZ/
+              lists/part-0001.jsonl     # surové stránky seznamů (se zdrojem a dotazem)
+              details/part-0001.jsonl   # max. 1 000 filmů na část, nahrává se průběžně
+              manifest.json             # zapisuje se jako poslední = běh je úplný
   ```
-  Složky ve tvaru `klíč=hodnota` čte BigQuery automaticky jako sloupce `dt` a `run` (hive partitioning). Každý řádek detailu má navíc pole `_fetched_at` (čas stažení). Podtržítko označuje pole přidané scraperem, ne TMDB.
+  Jen 4 úrovně. Prefix `raw/` by zdvojoval název bucketu a složka `dt=` by zdvojovala datum, které je v `run=`. Složky ve tvaru `klíč=hodnota` čte BigQuery automaticky jako sloupce `mode` a `run` (hive partitioning). Pole přidaná scraperem (`_sources`, `_fetched_at`) mají podtržítko, aby se odlišila od polí z TMDB.
   **Formát raw je JSONL, ne Parquet.** Je to přesná kopie odpovědi TMDB, nové nebo prázdné pole nezpůsobí konflikt schémat mezi částmi a scraper nepotřebuje `pyarrow`. Sloupcové uložení zajistí až nativní tabulky BigQuery. Pokud by objem dat byl větší, než se čeká, zapne se gzip (`.jsonl.gz`), který BigQuery čte přímo.
 
   Lifecycle pravidlo bucketu maže soubory starší než 160 dní, takže zůstává zhruba posledních 5 měsíčních běhů. Mazání řídí GCP, job nepotřebuje právo mazat.
-- **Načítání do BigQuery čistě přes SQL.** External table nad raw bucketem a Scheduled Query jednou měsíčně (po scraperu) vezme poslední úplný běh (s `manifest.json`), vyčistí ho a:
-  - `MERGE` do `movies`: 1 řádek na film, aktuální stav (tabulka roste jen s počtem filmů, ne s počtem běhů). Filmy, které v běhu chybí (například z odebrané země), dostanou `in_catalog = FALSE` a nemažou se. Časové sloupce:
+- **Načítání do BigQuery čistě přes SQL.** External table nad raw bucketem a Scheduled Query (po každém běhu scraperu) vezme poslední úplný běh (s `manifest.json`), vyčistí ho a:
+  - `MERGE` do `movies`: 1 řádek na film, aktuální stav (tabulka roste jen s počtem filmů, ne s počtem běhů) včetně aktuálních `sources`. `in_catalog = FALSE` dostanou jen filmy, které chybí v posledním **měsíčním** (`full`) běhu. Týdenní běh obsahuje jen kina a novinky, takže by jinak „vyřadil“ celý top 10k. Filmy se nemažou. Časové sloupce:
     - `first_seen_at`: první běh, ve kterém se film objevil. Nastaví se jednou a `MERGE` ho nikdy nepřepíše, takže „novinky v měsíci“ jdou filtrovat kdykoli zpětně. V prvním běhu ho dostanou všechny existující filmy, takže smysluplné novinky jsou až od druhého běhu.
     - `last_seen_at`: poslední běh, ve kterém film byl.
     - `updated_at`: kdy `MERGE` řádek naposledy změnil.
-  - `INSERT` do `movie_snapshots`: 1 řádek na film a běh (`id, run_date, status, release_date, vote_average, vote_count, popularity, in_catalog`). Slouží pro historii metrik, změny stavu (`Post Production` → `Released`) a posuny premiér. Je to kolem 120 tisíc malých řádků ročně při 10 000 filmech.
+  - `INSERT` do `movie_snapshots`: 1 řádek na film a běh (`id, run_date, mode, sources, status, release_date, release_date_cz, vote_average, vote_count, popularity`). Slouží pro historii metrik, změny stavu (`Post Production` → `Released`), posuny premiér a historii kin (kdy film začal hrát a kdy zmizel, s týdenní přesností). Je to kolem 120–150 tisíc malých řádků ročně.
   - **`movie_snapshots` se nikdy nemaže ani nepřestavuje z raw.** Je to trvalý záznam historie, protože raw drží jen ~5 měsíců. Kdyby se `movies` přestavovala, `first_seen_at` se dopočítá jako `MIN(run_date)` ze snapshotů.
   - Opakované spuštění nic nerozbije, protože `MERGE` je idempotentní.
+
+- **Kill switch přes GCP Spend caps (Billing → Budgets & caps), stejně jako u book_recommenderu.** GCP při dosažení měsíční částky sám pozastaví danou službu, bez vlastního kódu.
+  - Omezení: jeden cap platí pro jeden projekt a jednu službu. Podporované jsou Cloud Run, Cloud Run Functions, Gemini API a Vertex AI. Vypnutí není okamžité, takže cap se nastavuje trochu pod skutečný limit a co se utratí navíc, se zaplatí.
+  - **Cloud Run** (scraper, později aplikace): cap nastavit hned.
+  - **Vertex AI** (Gemini): cap ve fázi II. Jestli jde v jednom projektu mít druhý budget s capem, se ověří v konzoli.
+  - BigQuery, Cloud Storage a Cloud Build spend cap nemají. Jsou ve free tieru a hlídá je e-mailový alert v budgetu a `maximum_bytes_billed` u dotazů v BigQuery.
+  - Ruční okamžité zastavení: **Cancel** u běžícího spuštění jobu v konzoli (nebo `gcloud run jobs executions cancel`). Vlastní skript na vypínání se nedělá, aby nevznikaly dva systémy vedle sebe.
+  - Scraper má navíc vlastní pojistky (`max_runtime_minutes`, circuit breaker po opakovaných chybách), které chrání i TMDB API před zbytečnou zátěží.
 
 ## Roadmap
 
@@ -81,12 +103,15 @@ GitHub push ──► GitHub Actions ──► build image ──► deploy na C
   - [x] EDA surových dat (krok 1.3)
   - [x] Přepis scraperu podle strategie a test na jednom roce `CZ` (krok 1.4)
   - [x] Ostrý běh na `CZ` (krok 1.4)
-  - [ ] Plný běh pro všech 26 zemí
+  - [x] ~~Plný běh pro všech 26 zemí~~ zrušen po 14 minutách, katalog byl příliš velký (viz Rozhodnutí)
+  - [x] Scraper se třemi zdroji (top 10k, kina US/CZ, novinky 23 zemí), režimy `full` a `weekly` (krok 1.5)
+  - [x] Ostrý běh `weekly` a `full` (krok 1.5)
   - [ ] Lifecycle pravidlo bucketu (160 dní)
   - [ ] BigQuery: dataset `films`, external table, SQL pro cleaning
   - [ ] BigQuery: `movies` (`MERGE`) a `movie_snapshots` (`INSERT`)
   - [ ] Automatizace: Cloud Scheduler (scraper) a Scheduled Query (načtení)
-  - [ ] Budget alert
+  - [ ] Budget `films` se spend capem na Cloud Run a e-mailovými alerty
+  - [x] Pojistky ve scraperu (`max_runtime_minutes`, circuit breaker) (krok 1.5)
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
@@ -309,3 +334,32 @@ Výsledky (2026-10-26):
 | CZ 1900–2028 | 2 910 | 0 | 115 s | 3 soubory, 16,6 MB (~5,7 kB na film) | 1 soubor, 2,1 MB |
 
 Oříznutí credits ověřené na vzorku z kroku 1.2: z 44,3 kB na 12,2 kB na film u populárních filmů. U celého CZ katalogu je to ~5,7 kB na film, protože méně známé filmy mají menší štáb.
+
+### Krok 1.5 – Scraper se třemi zdroji, režimy `full` a `weekly`
+
+Plný běh přes `discover` pro 26 zemí od roku 1920 byl po 14 minutách zrušen (`gcloud run jobs executions cancel`): jen US do roku 2011 dalo ~107 tisíc filmů, celkový odhad byl 350–450 tisíc a hrozilo překročení časového limitu jobu. Strategie se změnila na tři zdroje (viz Rozhodnutí): top 10k, kina US/CZ a novinky z 23 zemí. Testovací a zrušené běhy jsou z bucketu smazané.
+
+Scraper (`scraper/main.py`, `scraper/config.toml`):
+- `[modes]` určuje, které zdroje se stahují v režimu `full` a `weekly`. Režim se volí proměnnou `MODE`.
+- Detail se stahuje s `append_to_response=credits,keywords,release_dates`. Každý film má `_sources` a `_fetched_at`.
+- Pojistky `[safety]`: `max_runtime_minutes = 120` a `max_consecutive_failures = 50`. Při překročení se běh ukončí bez `manifest.json`.
+- Cesta v bucketu: `tmdb/mode=…/run=…/` (oba běhy z 2026-10-26 jsou přesunuté ze staršího tvaru `raw/tmdb/mode=…/dt=…/run=…/` přes `gcloud storage mv` a jejich manifesty mají opravené cesty).
+
+```bash
+gcloud run jobs deploy films-scraper --source scraper --region us-central1 \
+  --service-account films-scraper@films-512811.iam.gserviceaccount.com \
+  --set-secrets "TMDB_TOKEN=tmdb-read-token:latest" --set-env-vars "BUCKET=films-512811-raw" \
+  --max-retries 0 --task-timeout 3h --memory 1Gi
+gcloud run jobs execute films-scraper --region us-central1 --update-env-vars "MODE=weekly" --wait
+gcloud run jobs execute films-scraper --region us-central1 --update-env-vars "MODE=full" --async
+```
+
+Výsledky (2026-10-26):
+| Běh | Filmů (unikátních) | Chyb | Doba | Velikost | Souborů |
+|---|---|---|---|---|---|
+| `weekly` | 5 407 | 0 | 3,5 min | ~29 MB (~4,7 kB na film v detailech) | 7 + manifest |
+| `full` | 15 290 | 0 | 9,5 min | 204 MB (~13 kB na film) | 18 + manifest |
+
+Filmy podle zdroje: top 10k 9 922 (TMDB během stránkování mírně přeřazuje pořadí, proto méně než 10 000), kina: US běží 586 / přijde 116, CZ běží 76 / přijde 43, novinky (−30 až +90 dní) celkem 5 278, z toho US 2 302, FR 455, GB 382, DE 309, ES 275, CA 229, IT 227, JP 177, NL 150, KR 139, AU 119, CZ 81, BE 81, PL 61, SE 56, CH 51, IE 42, AT 31, NO 26, FI 26, DK 24, NZ 23, SK 12.
+
+**Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
