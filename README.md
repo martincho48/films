@@ -388,4 +388,17 @@ Výsledky (2026-10-26):
 
 Filmy podle zdroje: top 10k 9 922 (TMDB během stránkování mírně přeřazuje pořadí, proto méně než 10 000), kina: US běží 586 / přijde 116, CZ běží 76 / přijde 43, novinky (−30 až +90 dní) celkem 5 278, z toho US 2 302, FR 455, GB 382, DE 309, ES 275, CA 229, IT 227, JP 177, NL 150, KR 139, AU 119, CZ 81, BE 81, PL 61, SE 56, CH 51, IE 42, AT 31, NO 26, FI 26, DK 24, NZ 23, SK 12.
 
+### Krok 1.6 – EDA dat z běhu `full`
+
+Notebook `eda/01_raw_tmdb.ipynb` je přepsaný na data z běhu `full` (2026-10-26, 15 290 filmů). Data jsou lokálně v `data/raw/tmdb/mode=full/run=…/`, stažená přes `gcloud storage cp -r gs://films-512811-raw/tmdb/mode=full/run=… data/raw/tmdb/mode=full`. Původní EDA vzorku 31 filmů zůstává v historii gitu.
+
+Notebook prochází počty podle zdroje, chybějící a nulové hodnoty, počet hlasů, délku, rok vydání, žánry, jazyky, země, status, CZ premiéru z `release_dates` a velikost záznamu.
+
+Hlavní zjištění:
+- **Top 10k je čistý.** Minimum je 300 hlasů (práh TMDB), popis i plakát má skoro každý film a `runtime < 40` jen 1,6 %.
+- **Novinky jsou z velké části šum.** 92,7 % bez hlasu, 69,7 % `runtime < 40` (26 % neznámá délka), 16 % bez popisu, 26 % bez herců a ~1 200 filmů ještě ve výrobě nebo plánu.
+- **Kina mají taky šum.** Filmy jen z kin: 62 % bez hlasu, 44 % `runtime < 40`. Kino premiéru v CZ má jen 12–22 % filmů z kin.
+- U novinek a kin bude potřeba filtr na kvalitu (délka, popis, plakát, popularita nebo hlasy). O tom se rozhodne při čištění v BigQuery.
+- JSONL se musí číst po řádcích `\n`, ne přes `splitlines()`, protože texty obsahují znaky jako U+2028.
+
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
