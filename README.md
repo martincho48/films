@@ -16,6 +16,39 @@ Uživatel ──► Streamlit na Cloud Run ──► Gemini (function calling) �
 GitHub push ──► GitHub Actions ──► build image ──► deploy na Cloud Run
 ```
 
+## Zdroje dat a filtry
+
+Všechna data jsou z TMDB API. Parametry jsou v `scraper/config.toml` a celá konfigurace každého běhu je uložená v jeho `manifest.json`.
+
+### Odkud se filmy berou
+
+| | **Top 10k** | **Kina** | **Novinky** |
+|---|---|---|---|
+| Endpoint | `/movie/top_rated` | `/movie/now_playing` a `/movie/upcoming` | `/discover/movie` |
+| Co obsahuje | nejlépe hodnocené filmy TMDB | co teď běží a co přijde do kin | nově vydané a chystané filmy (kino, streaming, festival) |
+| **Filtry při stahování** (v API) | žádné vlastní. Řazení podle `vote_average` a minimální počet hlasů určuje TMDB, adult je vyřazený | `region` = **US, CZ** (země kina) | **země původu** (`with_origin_country`) = 23 zemí, **premiéra** od −30 do +90 dní od dne běhu, `include_adult=false`, `include_video=false` |
+| Co se **nefiltruje** | země, rok, délka filmu | země původu (všechny filmy, které tam hrají), délka | délka filmu, počet hlasů, popularita |
+| Rozsah | 500 stránek = max. 10 000 filmů | všechny stránky pro každý region | všechny stránky pro každou zemi. Pokud dotaz přesáhne 10 000 výsledků, rozsah dat se dělí |
+| Režim | `full` (1× měsíčně) | `full` i `weekly` (1× týdně) | `full` i `weekly` (1× týdně) |
+| Parametry v `config.toml` | `[top_rated] pages` | `[cinema] regions` | `[new_releases] countries, days_back, days_ahead, include_adult, include_video` |
+| Značka v `_sources` | `top_rated` | `now_playing:US`, `upcoming:CZ` … | `new_release:FR` … |
+| Filmů v 1. běhu (2026-10-26) | 9 922 | 774 unikátních (US běží 586 / přijde 116, CZ běží 76 / přijde 43) | 5 074 unikátních (US 2 302, FR 455, GB 382, DE 309, ES 275 …, SK 12) |
+
+Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP`. CN, IN a HK jsou vyřazené kvůli obrovské lokální produkci.
+
+**Překryvy mezi zdroji (1. běh `full`):** 15 290 unikátních filmů. Jen v top 10k je 9 883 filmů, jen v novinkách 4 632, jen v kinech 297. Kina a novinky sdílejí 441 filmů, top 10k a kina 38, top 10k a novinky 3 (novinky ještě nemají dost hlasů na top 10k). Film ve více zdrojích se stahuje a ukládá jednou, všechny zdroje má v `_sources`.
+
+### Co se děje s každým filmem
+
+| Krok | Kde | Co |
+|---|---|---|
+| Sloučení | scraper | ID ze všech zdrojů se sloučí, duplicity se odstraní |
+| Detail | scraper | `/movie/{id}?append_to_response=credits,keywords,release_dates` |
+| Oříznutí `credits` | scraper | cast: prvních 20 herců podle `order`, crew: jen Director, Writer, Screenplay, Novel, Story, Producer, Executive Producer, Director of Photography, Original Music Composer, Editor, Casting (všichni lidé v roli). Ostatní pole beze změny |
+| Přidaná pole | scraper | `_sources` (ze kterých zdrojů film přišel) a `_fetched_at` (čas stažení) |
+| Uložení | GCS | JSONL po částech v `tmdb/mode=…/run=…/`, `manifest.json` jako poslední |
+| Čištění | BigQuery (zatím nehotové) | `runtime ≥ 40`, `0` a prázdné hodnoty → `NULL`, typy, pole. V raw zůstává všechno |
+
 ## Rozhodnutí
 
 - **Nejdřív lokálně, cloudové služby naostro.** Kód běží lokálně a volá skutečné služby v GCP (BigQuery, GCS, Gemini na Vertex AI). Na Cloud Run se později přesune stejný kód beze změn.
@@ -46,14 +79,7 @@ GitHub push ──► GitHub Actions ──► build image ──► deploy na C
   - Schéma BigQuery, scraper i aplikace jsou v jednom repu, takže změna schématu je v jednom commitu.
   - Přihlášení GitHub Actions do GCP (Workload Identity Federation) se nastaví jednou pro celé repo.
   - Za běhu má každá část vlastní service account s minimálními právy: `films-scraper` (secret TMDB, zápis do bucketu) a `films-app` (čtení z BigQuery, Vertex AI). Aplikace k TMDB tokenu přístup nemá.
-- **Strategie scrapingu: tři zdroje filmů a vždy plné stažení.** Původní plán (všechny filmy z vybraných zemí přes `discover`) se ukázal jako příliš velký: jen US od roku 1920 má přes 100 tisíc filmů, celkem odhadem 350–450 tisíc, většinou bez hlasů. Starý projekt pracoval s ~10 tisíci (Kaggle top 10k a upcoming). Nově se stahují tři zdroje, sloučí se podle `id` a ke každému filmu se stáhne detail:
-
-  | Zdroj | Endpoint | Filtr | Režim |
-  |---|---|---|---|
-  | **Top 10k** | `/movie/top_rated`, 500 stránek | globální, řazení a práh hlasů určuje TMDB | `full` (1× měsíčně) |
-  | **Kina** | `/movie/now_playing` a `/movie/upcoming` | `region` = US, CZ, všechny filmy, které tam hrají | `full` i `weekly` (1× týdně) |
-  | **Novinky** | `/discover/movie` | premiéra −30 až +90 dní, `with_origin_country` = 23 zemí, bez adult a video | `full` i `weekly` |
-  | Detail | `/movie/{id}?append_to_response=credits,keywords,release_dates` | ke každému filmu ze zdrojů výše | s každým během |
+- **Strategie scrapingu: tři zdroje filmů a vždy plné stažení.** Původní plán (všechny filmy z vybraných zemí přes `discover`) se ukázal jako příliš velký: jen US od roku 1920 má přes 100 tisíc filmů, celkem odhadem 350–450 tisíc, většinou bez hlasů. Starý projekt pracoval s ~10 tisíci (Kaggle top 10k a upcoming). Nově se stahují tři zdroje (top 10k, kina a novinky), sloučí se podle `id` a ke každému filmu se stáhne detail. Přehled zdrojů, filtrů a čísel je v sekci [Zdroje dat a filtry](#zdroje-dat-a-filtry).
 
   - **Top 10k se mění pomalu** (hlasování uživatelů TMDB, nové filmy se do něj dostanou po měsících), proto stačí měsíčně. Kina a novinky se mění každý týden.
   - **Země pro novinky (23):** `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE, NL, AT, CH, DK, SE, NO, FI, PL`, `KR, JP`. CN, IN a HK jsou vyřazené kvůli obrovské lokální produkci. Jejich světově známé filmy zachytí top 10k nebo kina v US.
