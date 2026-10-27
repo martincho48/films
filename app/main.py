@@ -66,18 +66,9 @@ st.set_page_config(page_title="Film Agent", page_icon="🎬", layout="wide")
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# Header stays on top while scrolling: Streamlit has no sticky option, so CSS on the
-# container's key class. 3.75rem = height of Streamlit's own top toolbar.
-background = "#0e1117" if st.context.theme.type == "dark" else "#ffffff"
-st.markdown(f"""<style>
-.st-key-header {{ position: sticky; top: 3.75rem; z-index: 999; background: {background};
-                  padding: 0.5rem 0; border-bottom: 1px solid rgba(128, 128, 128, 0.2); }}
-</style>""", unsafe_allow_html=True)
-
-with st.container(key="header"):
-    head, side = st.columns([6, 1], vertical_alignment="center")
-    head.markdown(f"## 🎬 Film Agent\nPowered by `{MODEL}`")
-    session = side.popover("💰 Session cost", use_container_width=True)  # filled at the end, after the new answer
+head, side = st.columns([6, 1], vertical_alignment="center")
+head.markdown(f"## 🎬 Film Agent\nPowered by `{MODEL}`")
+session = side.popover("💰 Session cost", use_container_width=True)  # filled at the end, after the new answer
 
 for entry in st.session_state.history:
     with st.chat_message("user"):
