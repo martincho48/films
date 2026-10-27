@@ -152,6 +152,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
   - [x] Závislosti pro aplikaci a agenta (krok 2.1)
   - [x] Vertex AI API a lokální přihlášení přes ADC (krok 2.2)
+  - [x] Minimální agent: Streamlit chat, Gemini vybírá funkci, jedna funkce `search_by_genre` (krok 2.3)
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -690,3 +691,35 @@ Na Cloud Runu se ADC nepoužívá. Aplikace tam běží pod vlastním service ac
 Na souhlasové stránce Googlu je potřeba zaškrtnout oprávnění pro Google Cloud (nejjednodušší je **Select all**). Bez něj přihlášení skončí chybou `cloud-platform scope is required but not consented`. Po úspěšném přihlášení `gcloud` nastaví `films-512811` jako quota project.
 
 Ověřeno 2026-10-27 z Pythonu ve venvu `uv_films` (oba dotazy jsou zdarma): BigQuery klient vrátil 11 927 řádků z `gold.movies` a `genai.Client(vertexai=True, project="films-512811", location="us-central1")` vypsal 35 dostupných modelů Gemini.
+
+### Krok 2.3 – Minimální agent s jednou funkcí
+
+Gemini funguje jen jako router: z dotazu a popisů funkcí vybere funkci a parametry. Funkci pak zavolá Python, výsledek z BigQuery jde rovnou do tabulky a modelu se neposílá. Platí se tak jen za dotaz, popisy funkcí a krátkou odpověď, ne za data.
+
+```
+dotaz → Gemini (systémová instrukce + popisy funkcí + dotaz) → název funkce + parametry
+      → Python funkce → BigQuery (gold.movies) → tabulka ve Streamlitu
+```
+
+| Soubor | Obsah |
+|---|---|
+| `app/tools.py` | Funkce s pevným parametrizovaným SQL nad `gold.movies` a jejich popisy pro model (`TOOLS`). Zatím jen `search_by_genre(genre, limit)`: 19 žánrů jako `enum`, limit 1–50, `maximum_bytes_billed` 100 MB. |
+| `app/agent.py` | Klient Vertex AI, model `gemini-3.5-flash-lite`, `temperature=0`, function calling bez automatické smyčky. Vrací funkci, parametry, tokeny a odhad ceny. |
+| `app/main.py` | Streamlit chat. U odpovědi ukáže tokeny a cenu v Kč, volání funkce a tabulku, v bočním panelu je útrata za session. |
+
+Model vidí jen systémovou instrukci, `description` a `parameters` z `TOOLS` a dotaz. Tělo funkce, SQL ani data nevidí. Popis funkce tak rozhoduje o tom, jestli model vybere správně.
+
+**Past: region.** Modely Gemini 3.x nejsou v `us-central1` (vrací `404 NOT_FOUND`), jsou jen na endpointu `global`. V `agent.py` je proto `LOCATION = "global"`. Dostupnost modelu se dá ověřit zdarma přes `client.models.count_tokens`.
+
+**Cena v Kč** je odhad. Tokeny vrací Vertex u každé odpovědi (thinking tokeny se účtují jako výstup), ceník je konstanta `PRICE_USD_PER_1M` v `agent.py` (z ceníků třetích stran, $0.30 / $2.50 za 1M tokenů) a kurz USD/CZK se bere z denního kurzu ČNB. Skutečnou útratu ukazuje Billing v konzoli.
+
+**Spuštění** (z kořene repa, v Git Bashi i PowerShellu):
+
+```bash
+source "/c/Users/mabilek/uv_all_venvs/uv_films/Scripts/activate"   # Git Bash
+python -m streamlit run app/main.py
+```
+
+V Git Bashi `streamlit run` hlásí `Permission denied`, proto `python -m streamlit`. Aplikace běží na http://localhost:8501.
+
+Ověřeno 2026-10-27: dotaz „find films by gender I want comedy“ → `search_by_genre(genre='Comedy')`, tabulka komedií z BigQuery, 159 vstupních a 18 výstupních tokenů, thinking 0, ≈ 0,2 haléře za dotaz.
