@@ -6,6 +6,7 @@ the tool declarations and the short answer.
 """
 
 from dataclasses import dataclass
+from datetime import date
 
 from google import genai
 from google.genai import types
@@ -45,8 +46,9 @@ def _config() -> types.GenerateContentConfig:
         )
         for name, (_, decl) in TOOLS.items()
     ]
+    # today's date lets the model turn 'next week' etc. into YYYY-MM-DD
     return types.GenerateContentConfig(
-        system_instruction=SYSTEM,
+        system_instruction=f"{SYSTEM} Today is {date.today():%A, %Y-%m-%d}.",
         tools=[types.Tool(function_declarations=declarations)],
         tool_config=types.ToolConfig(function_calling_config=types.FunctionCallingConfig(mode="AUTO")),
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),

@@ -153,6 +153,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Závislosti pro aplikaci a agenta (krok 2.1)
   - [x] Vertex AI API a lokální přihlášení přes ADC (krok 2.2)
   - [x] Minimální agent: Streamlit chat, Gemini vybírá funkci, jedna funkce `search_by_genre` (krok 2.3)
+  - [x] Jedna obecná funkce `search_movies` s filtry (žánry, roky, hodnocení, osoba, kina, premiéra, znovuuvedení, řazení) (krok 2.4)
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -723,3 +724,33 @@ python -m streamlit run app/main.py
 V Git Bashi `streamlit run` hlásí `Permission denied`, proto `python -m streamlit`. Aplikace běží na http://localhost:8501.
 
 Ověřeno 2026-10-27: dotaz „find films by gender I want comedy“ → `search_by_genre(genre='Comedy')`, tabulka komedií z BigQuery, 159 vstupních a 18 výstupních tokenů, thinking 0, ≈ 0,2 haléře za dotaz.
+
+### Krok 2.4 – Jedna obecná funkce `search_movies`
+
+Funkce na každou kombinaci („komedie v kinech“, „sci-fi z 90. let nad 8“…) by se nedaly udržet a model by se v nich ztrácel. Kombinace proto řeší **parametry jedné funkce**, ne počet funkcí. Model vyplní jen ty filtry, které z dotazu vyčte. SQL se skládá z pevných kousků a hodnoty jdou vždy jako parametry dotazu. `search_by_genre` a mezikrok `cinema_movies` jsou nahrazené.
+
+| Parametr | Význam |
+|---|---|
+| `genres` | seznam žánrů (enum 19 hodnot), film musí mít všechny |
+| `year_from`, `year_to` | rok vzniku (rok z `release_date`) |
+| `min_rating` | minimální hodnocení 0–10 |
+| `person` | režisér, scenárista nebo herec, část jména bez ohledu na velikost písmen |
+| `cinema` | `now_playing` (v kinech teď) / `upcoming` (premiéra teprve bude) |
+| `country` | `CZ` (výchozí) / `US`, jen s `cinema` |
+| `premiere_from`, `premiere_to` | rozsah data premiéry v kinech dané země, `YYYY-MM-DD`, jen s `cinema` |
+| `new_only` | bez znovuuvedení |
+| `sort_by` | `popularity` (výchozí) / `rating` / `premiere` / `year` |
+| `limit` | 1–50, výchozí 20 |
+
+Pravidla uvnitř funkce:
+- **Rok vzniku vs. premiéra:** `release_date` je první uvedení kdekoli na světě (TMDB), tedy prakticky rok vzniku. `release_date_cz` / `release_date_us` je první uvedení v kinech v dané zemi. Rok natáčení TMDB nemá.
+- **Znovuuvedení** (`rerelease`) je film v kinech, jehož `release_date` je víc než 2 roky v minulosti (`RERELEASE_YEARS`). Hranice 1 rok by chytila i festivalové filmy, které do kin dorazí o rok později. V kinech CZ jsou například *Avengers: Endgame* (2019) a *Krátký film o lásce* (1988).
+- **`upcoming` = premiéra od dneška.** TMDB do seznamu „upcoming“ dává i znovuuvedení (*Rocky* 1976, *The Crow* 1994) a filmy, které už vyšly. Znovuuvedení, u kterých TMDB nemá nové datum premiéry, se tak v `upcoming` neobjeví.
+- **Hodnocení** (`min_rating` nebo `sort_by=rating`) bere jen filmy s aspoň 50 hlasy (`MIN_VOTES`).
+- Nesmyslné hodnoty (neznámý žánr nebo země, premiéra bez `cinema`, obrácené rozsahy, text místo data) funkce odmítne s `ValueError` a chyba se ukáže v chatu.
+
+Model v systémové instrukci dostává dnešní datum, takže si „příští týden“ převede na `YYYY-MM-DD` sám.
+
+**Past: Streamlit po změně `tools.py` nebo `agent.py` restartovat** (Ctrl+C a znovu spustit). Rerun v prohlížeči znovu spustí jen `main.py`, importované moduly zůstanou staré a model dostává staré popisy funkcí.
+
+Ověřeno 2026-10-27: SQL pro kombinace (žánry + roky + řazení, osoba, kina + `new_only`, premiéra v rozsahu, US) a odmítnutí neplatných vstupů přímo proti BigQuery. V aplikaci dotaz na horory v kinech → `search_movies(genres=['Horror'], country='CZ', cinema='now_playing')`, 512 vstupních a 31 výstupních tokenů, ≈ 0,5 haléře za dotaz.
