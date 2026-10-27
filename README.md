@@ -155,6 +155,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Minimální agent: Streamlit chat, Gemini vybírá funkci, jedna funkce `search_by_genre` (krok 2.3)
   - [x] Jedna obecná funkce `search_movies` s filtry (žánry, roky, hodnocení, osoba, kina, premiéra, znovuuvedení, řazení) (krok 2.4)
   - [x] Validace: testy funkce, golden set a evaluace agenta s metrikami, první ladění popisů (krok 2.5)
+  - [x] Úpravy UI: Film Agent, hlavička zůstává nahoře, cena v CZK s rozpisem v tooltipu, sbalené detaily volání, indikace práce (krok 2.6)
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -796,3 +797,19 @@ Zbývající chyba `gap-01` („o čem je film Krátký film o lásce?“) je me
 Pravidlo: změna agenta (popis, parametr, model, systémová instrukce) se commitne, jen když evaluace neukáže zhoršení proti baseline. Později to bude brána v GitHub Actions před nasazením.
 
 Ověřeno 2026-10-27: `test_tools.py` 19/19, evaluace běh 2 36/37 za ≈ 0,20 Kč.
+
+### Krok 2.6 – Úpravy UI
+
+`app/main.py`, UI je anglicky (dotazy jdou psát česky):
+
+| Prvek | Podoba |
+|---|---|
+| Hlavička | „🎬 Film Agent“, pod ní „Powered by `gemini-3.5-flash-lite`“, vpravo tlačítko **💰 Session cost** (celková cena, počet dotazů a tokenů za session). Při scrollování zůstává nahoře. |
+| Odpověď | tabulka z BigQuery, nad ní sbalené **Call details** s voláním funkce, pod ní `543 tokens · 0.0050 CZK`. Rozpis (input / output / thinking, USD, kurz ČNB) je v tooltipu. |
+| Indikace práce | dotaz se v chatu ukáže hned, pak „Thinking…“ (model) a „Loading from BigQuery…“ (dotaz) |
+
+**Sticky hlavička:** Streamlit to sám neumí, proto je hlavička v `st.container(key="header")` a CSS nastaví třídě `.st-key-header` `position: sticky; top: 3.75rem` (výška vlastní lišty Streamlitu nahoře). Barva pozadí se bere podle `st.context.theme.type` (světlý / tmavý režim).
+
+UI se dá otestovat bez prohlížeče a bez volání Gemini přes `streamlit.testing.v1.AppTest`, kde se `agent.decide` nahradí pevným rozhodnutím.
+
+Ověřeno 2026-10-27 v prohlížeči: hlavička při scrollování zůstává nahoře.

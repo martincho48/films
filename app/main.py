@@ -1,6 +1,6 @@
 """Streamlit chat: question -> Gemini picks a tool -> BigQuery -> table.
 
-Run:  streamlit run app/main.py
+Run:  python -m streamlit run app/main.py
 """
 
 import urllib.request
@@ -29,52 +29,79 @@ def usd_czk() -> tuple[float, str] | None:
     return None
 
 
-def cost_label(d) -> str:
-    tokens = f"tokeny: vstup {d.input_tokens}, výstup {d.output_tokens}, thinking {d.thinking_tokens}"
+def price(usd: float) -> str:
     rate = usd_czk()
-    if rate is None:
-        return f"{tokens} · ≈ ${d.cost_usd:.6f} (kurz ČNB nedostupný)"
-    czk, day = rate
-    return f"{tokens} · ≈ {d.cost_usd * czk * 100:.4f} haléře (${d.cost_usd:.6f}, kurz ČNB {czk:.3f} ze dne {day})"
-
-st.set_page_config(page_title="films", layout="wide")
-st.title("films")
-st.caption(f"Model `{MODEL}` vybere funkci, data se načtou z BigQuery a modelu se neposílají.")
-
-if "history" not in st.session_state:
-    st.session_state.history = []
+    return f"{usd * rate[0]:.4f} CZK" if rate else f"${usd:.6f}"
 
 
-def show(entry: dict) -> None:
-    with st.chat_message("user"):
-        st.write(entry["question"])
-    with st.chat_message("assistant"):
-        d = entry["decision"]
-        st.caption(cost_label(d))
-        if d.tool is None:
-            st.write(d.text)
-            return
-        st.code(f"{d.tool}({', '.join(f'{k}={v!r}' for k, v in d.args.items())})", language="python")
+def cost_caption(d) -> None:
+    """Short line under the answer, full breakdown in the tooltip."""
+    total = d.input_tokens + d.output_tokens + d.thinking_tokens
+    rate = usd_czk()
+    fx = f"CNB rate {rate[0]:.3f} USD/CZK ({rate[1]})" if rate else "CNB rate unavailable"
+    details = (
+        f"input {d.input_tokens} · output {d.output_tokens} · thinking {d.thinking_tokens}  \n"
+        f"${d.cost_usd:.6f} · {fx}  \n"
+        "Estimate from the price list in agent.py."
+    )
+    st.caption(f"{total} tokens · {price(d.cost_usd)}", help=details)
+
+
+def show_answer(entry: dict) -> None:
+    d = entry["decision"]
+    if d.tool is None:
+        st.write(d.text)
+    else:
+        with st.expander("Call details"):
+            st.code(f"{d.tool}({', '.join(f'{k}={v!r}' for k, v in d.args.items())})", language="python")
         if entry.get("error"):
             st.error(entry["error"])
         else:
             st.dataframe(entry["result"], hide_index=True)
+    cost_caption(d)
 
+
+st.set_page_config(page_title="Film Agent", page_icon="🎬", layout="wide")
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+# Header stays on top while scrolling: Streamlit has no sticky option, so CSS on the
+# container's key class. 3.75rem = height of Streamlit's own top toolbar.
+background = "#0e1117" if st.context.theme.type == "dark" else "#ffffff"
+st.markdown(f"""<style>
+.st-key-header {{ position: sticky; top: 3.75rem; z-index: 999; background: {background};
+                  padding: 0.5rem 0; border-bottom: 1px solid rgba(128, 128, 128, 0.2); }}
+</style>""", unsafe_allow_html=True)
+
+with st.container(key="header"):
+    head, side = st.columns([6, 1], vertical_alignment="center")
+    head.markdown(f"## 🎬 Film Agent\nPowered by `{MODEL}`")
+    session = side.popover("💰 Session cost", use_container_width=True)  # filled at the end, after the new answer
 
 for entry in st.session_state.history:
-    show(entry)
+    with st.chat_message("user"):
+        st.write(entry["question"])
+    with st.chat_message("assistant"):
+        show_answer(entry)
 
-if question := st.chat_input("Např. najdi mi nějaké komedie"):
-    entry = {"question": question, "decision": decide(question)}
-    if entry["decision"].tool:
-        try:
-            entry["result"] = run_tool(entry["decision"].tool, entry["decision"].args)
-        except Exception as e:  # show tool errors in the chat instead of crashing the app
-            entry["error"] = f"{type(e).__name__}: {e}"
+if question := st.chat_input("e.g. new horror films in cinemas"):
+    with st.chat_message("user"):
+        st.write(question)
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking…"):
+            entry = {"question": question, "decision": decide(question)}
+        if entry["decision"].tool:
+            with st.spinner("Loading from BigQuery…"):
+                try:
+                    entry["result"] = run_tool(entry["decision"].tool, entry["decision"].args)
+                except Exception as e:  # show tool errors in the chat instead of crashing the app
+                    entry["error"] = f"{type(e).__name__}: {e}"
+        show_answer(entry)
     st.session_state.history.append(entry)
-    show(entry)
 
-total_usd = sum(e["decision"].cost_usd for e in st.session_state.history)
-rate = usd_czk()
-st.sidebar.metric("Útrata za tuto session", f"{total_usd * rate[0]:.4f} Kč" if rate else f"${total_usd:.6f}")
-st.sidebar.caption(f"{len(st.session_state.history)} dotazů, odhad podle ceníku v agent.py")
+with session:
+    h = st.session_state.history
+    st.metric("Total session cost", price(sum(e["decision"].cost_usd for e in h)))
+    st.caption(f"{len(h)} queries · "
+               f"{sum(e['decision'].input_tokens + e['decision'].output_tokens + e['decision'].thinking_tokens for e in h)} tokens")
