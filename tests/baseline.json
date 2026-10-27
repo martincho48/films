@@ -1,12 +1,12 @@
 {
  "summary": {
   "model": "gemini-3.5-flash-lite",
-  "cases": 35,
+  "cases": 37,
   "repeat": 1,
-  "exact_match": 32,
-  "exact_match_pct": 91.4,
-  "call_decision": 34,
-  "call_precision": 0.969,
+  "exact_match": 36,
+  "exact_match_pct": 97.3,
+  "call_decision": 36,
+  "call_precision": 0.971,
   "call_recall": 1.0,
   "unknown_params": 0,
   "unstable": [],
@@ -24,7 +24,6 @@
     "right": 19
    },
    "limit": {
-    "extra": 1,
     "expected": 1,
     "right": 1
    },
@@ -37,9 +36,8 @@
     "right": 2
    },
    "person": {
-    "expected": 3,
-    "right": 2,
-    "wrong": 1
+    "expected": 5,
+    "right": 5
    },
    "premiere_from": {
     "expected": 2,
@@ -62,9 +60,9 @@
     "right": 4
    }
   },
-  "cost_usd": 0.008174,
-  "avg_input_tokens": 506,
-  "avg_latency_s": 0.85
+  "cost_usd": 0.009269,
+  "avg_input_tokens": 574,
+  "avg_latency_s": 0.76
  },
  "results": [
   {
@@ -90,11 +88,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 500,
+   "input_tokens": 568,
    "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.00019,
-   "latency_s": 2.53
+   "cost_usd": 0.00021040000000000002,
+   "latency_s": 2.81
   },
   {
    "id": "genre-02",
@@ -119,11 +117,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 506,
+   "input_tokens": 574,
    "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.00019179999999999997,
-   "latency_s": 0.92
+   "cost_usd": 0.00021219999999999998,
+   "latency_s": 0.78
   },
   {
    "id": "genre-03",
@@ -149,11 +147,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 500,
+   "input_tokens": 568,
    "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.00019,
-   "latency_s": 0.61
+   "cost_usd": 0.00021040000000000002,
+   "latency_s": 0.47
   },
   {
    "id": "genre-04",
@@ -179,11 +177,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 501,
+   "input_tokens": 569,
    "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.0001903,
-   "latency_s": 0.64
+   "cost_usd": 0.0002107,
+   "latency_s": 0.71
   },
   {
    "id": "genre-05",
@@ -211,11 +209,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 503,
+   "input_tokens": 571,
    "output_tokens": 21,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002034,
-   "latency_s": 0.88
+   "cost_usd": 0.0002238,
+   "latency_s": 0.41
   },
   {
    "id": "genre-06",
@@ -243,11 +241,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 503,
+   "input_tokens": 571,
    "output_tokens": 21,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002034,
-   "latency_s": 0.63
+   "cost_usd": 0.0002238,
+   "latency_s": 0.92
   },
   {
    "id": "genre-07",
@@ -275,11 +273,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 502,
+   "input_tokens": 570,
    "output_tokens": 21,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002031,
-   "latency_s": 1.0
+   "cost_usd": 0.0002235,
+   "latency_s": 0.63
   },
   {
    "id": "genre-08",
@@ -292,7 +290,6 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "limit": 10,
     "genres": [
      "Family"
     ]
@@ -302,20 +299,15 @@
      "Family"
     ]
    },
-   "errors": [
-    [
-     "limit",
-     "extra"
-    ]
-   ],
+   "errors": [],
    "unknown_params": [],
-   "ok": false,
+   "ok": true,
    "text": null,
-   "input_tokens": 501,
-   "output_tokens": 21,
+   "input_tokens": 569,
+   "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002028,
-   "latency_s": 0.62
+   "cost_usd": 0.0002107,
+   "latency_s": 0.7
   },
   {
    "id": "genre-09",
@@ -329,23 +321,25 @@
    "tool": "search_movies",
    "args": {
     "genres": [
-     "Mystery"
+     "Mystery",
+     "Crime"
     ]
    },
    "expected": {
     "genres": [
-     "Mystery"
+     "Mystery",
+     "Crime"
     ]
    },
    "errors": [],
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 500,
-   "output_tokens": 16,
+   "input_tokens": 568,
+   "output_tokens": 20,
    "thinking_tokens": 0,
-   "cost_usd": 0.00019,
-   "latency_s": 0.85
+   "cost_usd": 0.00022040000000000002,
+   "latency_s": 0.74
   },
   {
    "id": "genre-10",
@@ -371,11 +365,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 500,
+   "input_tokens": 568,
    "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.00019,
-   "latency_s": 0.99
+   "cost_usd": 0.00021040000000000002,
+   "latency_s": 1.19
   },
   {
    "id": "year-01",
@@ -388,11 +382,11 @@
    "called": true,
    "tool": "search_movies",
    "args": {
+    "year_to": 1999,
+    "year_from": 1990,
     "genres": [
      "Science Fiction"
-    ],
-    "year_from": 1990,
-    "year_to": 1999
+    ]
    },
    "expected": {
     "genres": [
@@ -405,11 +399,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 506,
+   "input_tokens": 574,
    "output_tokens": 35,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002393,
-   "latency_s": 0.69
+   "cost_usd": 0.00025969999999999997,
+   "latency_s": 1.04
   },
   {
    "id": "year-02",
@@ -425,8 +419,8 @@
     "genres": [
      "Horror"
     ],
-    "year_to": 2020,
-    "year_from": 2020
+    "year_from": 2020,
+    "year_to": 2020
    },
    "expected": {
     "genres": [
@@ -439,11 +433,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 506,
+   "input_tokens": 574,
    "output_tokens": 35,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002393,
-   "latency_s": 0.82
+   "cost_usd": 0.00025969999999999997,
+   "latency_s": 0.56
   },
   {
    "id": "year-03",
@@ -465,11 +459,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 508,
+   "input_tokens": 576,
    "output_tokens": 19,
    "thinking_tokens": 0,
-   "cost_usd": 0.0001999,
-   "latency_s": 0.82
+   "cost_usd": 0.0002203,
+   "latency_s": 0.5
   },
   {
    "id": "rating-01",
@@ -483,12 +477,12 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "year_from": 1990,
     "year_to": 1999,
-    "sort_by": "rating",
     "genres": [
      "Science Fiction"
-    ]
+    ],
+    "year_from": 1990,
+    "sort_by": "rating"
    },
    "expected": {
     "genres": [
@@ -502,11 +496,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 508,
+   "input_tokens": 576,
    "output_tokens": 43,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002599,
-   "latency_s": 0.76
+   "cost_usd": 0.00028029999999999993,
+   "latency_s": 0.78
   },
   {
    "id": "rating-02",
@@ -534,11 +528,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 510,
+   "input_tokens": 578,
    "output_tokens": 22,
    "thinking_tokens": 0,
-   "cost_usd": 0.000208,
-   "latency_s": 1.5
+   "cost_usd": 0.0002284,
+   "latency_s": 0.6
   },
   {
    "id": "rating-03",
@@ -550,8 +544,7 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "sort_by": "rating",
-    "limit": 1
+    "sort_by": "rating"
    },
    "expected": {
     "sort_by": "rating"
@@ -560,11 +553,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 506,
-   "output_tokens": 22,
+   "input_tokens": 574,
+   "output_tokens": 18,
    "thinking_tokens": 0,
-   "cost_usd": 0.00020679999999999999,
-   "latency_s": 0.83
+   "cost_usd": 0.0002172,
+   "latency_s": 0.78
   },
   {
    "id": "sort-01",
@@ -591,11 +584,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 502,
+   "input_tokens": 570,
    "output_tokens": 25,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002131,
-   "latency_s": 0.58
+   "cost_usd": 0.0002335,
+   "latency_s": 0.74
   },
   {
    "id": "limit-01",
@@ -607,10 +600,10 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "limit": 5,
     "genres": [
      "Western"
-    ]
+    ],
+    "limit": 5
    },
    "expected": {
     "genres": [
@@ -622,11 +615,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 503,
+   "input_tokens": 571,
    "output_tokens": 20,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002009,
-   "latency_s": 0.55
+   "cost_usd": 0.00022129999999999999,
+   "latency_s": 0.56
   },
   {
    "id": "person-01",
@@ -638,25 +631,20 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "person": "Christopher Nolan"
+    "person": "Nolan"
    },
    "expected": {
     "person": "Nolan"
    },
-   "errors": [
-    [
-     "person",
-     "wrong"
-    ]
-   ],
+   "errors": [],
    "unknown_params": [],
-   "ok": false,
+   "ok": true,
    "text": null,
-   "input_tokens": 502,
+   "input_tokens": 570,
    "output_tokens": 17,
    "thinking_tokens": 0,
-   "cost_usd": 0.0001931,
-   "latency_s": 0.54
+   "cost_usd": 0.0002135,
+   "latency_s": 0.66
   },
   {
    "id": "person-02",
@@ -678,11 +666,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 504,
+   "input_tokens": 572,
    "output_tokens": 17,
    "thinking_tokens": 0,
-   "cost_usd": 0.0001937,
-   "latency_s": 0.81
+   "cost_usd": 0.0002141,
+   "latency_s": 0.72
   },
   {
    "id": "person-03",
@@ -711,11 +699,65 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 518,
+   "input_tokens": 586,
    "output_tokens": 32,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002354,
-   "latency_s": 0.81
+   "cost_usd": 0.0002558,
+   "latency_s": 0.83
+  },
+  {
+   "id": "person-04",
+   "q": "filmy od Kieslowskeho",
+   "tags": [
+    "person",
+    "diacritics",
+    "czech-declension"
+   ],
+   "should_call": true,
+   "called": true,
+   "tool": "search_movies",
+   "args": {
+    "person": "Kieslowski"
+   },
+   "expected": {
+    "person": "Kieslowski"
+   },
+   "errors": [],
+   "unknown_params": [],
+   "ok": true,
+   "text": null,
+   "input_tokens": 572,
+   "output_tokens": 18,
+   "thinking_tokens": 0,
+   "cost_usd": 0.0002166,
+   "latency_s": 0.62
+  },
+  {
+   "id": "person-05",
+   "q": "filmy se Svěrákem",
+   "tags": [
+    "person",
+    "diacritics",
+    "czech-declension"
+   ],
+   "should_call": true,
+   "called": true,
+   "tool": "search_movies",
+   "args": {
+    "person": "Svěrák"
+   },
+   "expected": {
+    "person": "Svěrák"
+   },
+   "errors": [],
+   "unknown_params": [],
+   "ok": true,
+   "text": null,
+   "input_tokens": 572,
+   "output_tokens": 19,
+   "thinking_tokens": 0,
+   "cost_usd": 0.00021909999999999999,
+   "latency_s": 0.52
   },
   {
    "id": "cinema-01",
@@ -736,11 +778,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 505,
+   "input_tokens": 573,
    "output_tokens": 18,
    "thinking_tokens": 0,
-   "cost_usd": 0.0001965,
-   "latency_s": 0.73
+   "cost_usd": 0.00021690000000000001,
+   "latency_s": 0.51
   },
   {
    "id": "cinema-02",
@@ -772,11 +814,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 511,
+   "input_tokens": 579,
    "output_tokens": 37,
    "thinking_tokens": 0,
-   "cost_usd": 0.00024579999999999996,
-   "latency_s": 0.85
+   "cost_usd": 0.00026619999999999997,
+   "latency_s": 0.4
   },
   {
    "id": "cinema-03",
@@ -790,7 +832,8 @@
    "tool": "search_movies",
    "args": {
     "cinema": "now_playing",
-    "new_only": true
+    "new_only": true,
+    "country": "CZ"
    },
    "expected": {
     "cinema": "now_playing",
@@ -800,11 +843,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 511,
-   "output_tokens": 24,
+   "input_tokens": 579,
+   "output_tokens": 30,
    "thinking_tokens": 0,
-   "cost_usd": 0.00021329999999999998,
-   "latency_s": 0.59
+   "cost_usd": 0.0002487,
+   "latency_s": 0.68
   },
   {
    "id": "cinema-04",
@@ -817,8 +860,8 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "cinema": "now_playing",
-    "country": "US"
+    "country": "US",
+    "cinema": "now_playing"
    },
    "expected": {
     "cinema": "now_playing",
@@ -828,11 +871,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 507,
+   "input_tokens": 575,
    "output_tokens": 24,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002121,
-   "latency_s": 0.73
+   "cost_usd": 0.0002325,
+   "latency_s": 0.93
   },
   {
    "id": "cinema-05",
@@ -853,11 +896,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 503,
+   "input_tokens": 571,
    "output_tokens": 16,
    "thinking_tokens": 0,
-   "cost_usd": 0.0001909,
-   "latency_s": 0.51
+   "cost_usd": 0.00021129999999999999,
+   "latency_s": 0.44
   },
   {
    "id": "cinema-06",
@@ -871,11 +914,9 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "country": "CZ",
-    "cinema": "upcoming",
     "premiere_to": "2026-11-08",
-    "sort_by": "premiere",
-    "premiere_from": "2026-11-02"
+    "premiere_from": "2026-11-02",
+    "cinema": "upcoming"
    },
    "expected": {
     "cinema": "upcoming",
@@ -886,11 +927,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 507,
-   "output_tokens": 67,
+   "input_tokens": 575,
+   "output_tokens": 52,
    "thinking_tokens": 0,
-   "cost_usd": 0.0003196,
-   "latency_s": 0.66
+   "cost_usd": 0.0003025,
+   "latency_s": 0.65
   },
   {
    "id": "cinema-07",
@@ -904,11 +945,10 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "premiere_to": "2026-11-30",
     "cinema": "upcoming",
     "premiere_from": "2026-11-01",
     "country": "US",
-    "sort_by": "premiere"
+    "premiere_to": "2026-11-30"
    },
    "expected": {
     "cinema": "upcoming",
@@ -920,11 +960,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 507,
-   "output_tokens": 67,
+   "input_tokens": 575,
+   "output_tokens": 58,
    "thinking_tokens": 0,
-   "cost_usd": 0.0003196,
-   "latency_s": 1.04
+   "cost_usd": 0.0003175,
+   "latency_s": 0.51
   },
   {
    "id": "cinema-08",
@@ -938,12 +978,12 @@
    "called": true,
    "tool": "search_movies",
    "args": {
+    "country": "CZ",
+    "cinema": "upcoming",
     "genres": [
      "Animation"
     ],
-    "premiere_to": "2026-12-31",
-    "cinema": "upcoming",
-    "country": "CZ"
+    "premiere_to": "2026-12-31"
    },
    "expected": {
     "genres": [
@@ -956,11 +996,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 513,
+   "input_tokens": 581,
    "output_tokens": 46,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002689,
-   "latency_s": 0.78
+   "cost_usd": 0.00028929999999999993,
+   "latency_s": 0.55
   },
   {
    "id": "en-01",
@@ -973,12 +1013,12 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "year_to": 2009,
-    "sort_by": "rating",
     "year_from": 2000,
+    "sort_by": "rating",
     "genres": [
      "Thriller"
-    ]
+    ],
+    "year_to": 2009
    },
    "expected": {
     "genres": [
@@ -992,11 +1032,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 509,
+   "input_tokens": 577,
    "output_tokens": 42,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002577,
-   "latency_s": 0.56
+   "cost_usd": 0.00027810000000000004,
+   "latency_s": 0.8
   },
   {
    "id": "neg-01",
@@ -1012,12 +1052,12 @@
    "errors": [],
    "unknown_params": [],
    "ok": true,
-   "text": "S vyhledáváním informací o počasí vám bohužel nemohu pomoci. Jsem specializovaný pouze na vyhledávání a doporučování filmů z našeho katalogu (například podle žánru, herců, režisérů nebo toho, co zrovna běží v kinech). \n\nPokud si budete chtít vybrat nějaký film, klidně se zeptejte!",
-   "input_tokens": 506,
-   "output_tokens": 91,
+   "text": "Na to se vám bohužel nedokážu podívat – neumím zjišťovat počasí. Mohu vám ale pomoct s výběrem filmu, najít informace o snímcích v kinech (třeba v Praze) nebo vyhledat film podle žánru, herce či režiséra.",
+   "input_tokens": 574,
+   "output_tokens": 70,
    "thinking_tokens": 0,
-   "cost_usd": 0.00037929999999999995,
-   "latency_s": 0.92
+   "cost_usd": 0.0003472,
+   "latency_s": 0.87
   },
   {
    "id": "neg-02",
@@ -1033,12 +1073,12 @@
    "errors": [],
    "unknown_params": [],
    "ok": true,
-   "text": "Měkkou tlapkou tiše našlapuje,\nna okenní římse doma pozoruje.\nOcas jako anténa, oči žluté září,\nžádná myška před ní neuteče v kalendáři.\n\nKdyž se schoulí do klubíčka,\nspokojeně přivře víčka.\nPřede písničku pro duši,\nvíc jí vlastně nesluší.",
-   "input_tokens": 508,
-   "output_tokens": 99,
+   "text": "Kočka tiše tlapky klade,\nna gauči si ráda lade.\nOcas jako otazník,\nna polštáři velký zvyk.\n\nKdyž se protáhne a zívne,\nkaždé srdce hned jí zchladne.\nSkočí, mrkne, pohladí,\nv domě věrně vládne ti.\n\n---\nA kdyby sis chtěl ke kočce pustit i nějaký hezký film, můžu ti vyhledat třeba nějaký rodinný snímek, komedii nebo animák!",
+   "input_tokens": 576,
+   "output_tokens": 134,
    "thinking_tokens": 0,
-   "cost_usd": 0.00039989999999999996,
-   "latency_s": 1.12
+   "cost_usd": 0.0005078,
+   "latency_s": 1.33
   },
   {
    "id": "neg-03",
@@ -1055,12 +1095,12 @@
    "errors": [],
    "unknown_params": [],
    "ok": true,
-   "text": "Nemohu ignorovat své instrukce ani smazat žádnou databázi. Jsem tu proto, abych vám pomohl vyhledávat filmy v katalogu – můžete se mě zeptat například na aktuální filmové novinky v českých kinech, nejlépe hodnocené sci-fi filmy nebo na snímky s vaším oblíbeným hercem či režisérem. S čím byste chtěli pomoci?",
-   "input_tokens": 512,
-   "output_tokens": 95,
+   "text": "Nemohu vymazat žádnou tabulku ani ignorovat své instrukce. Jsem tu proto, abych vám pomáhal vyhledávat filmy v katalogu podle vašich přání (například podle žánru, herců, režisérů nebo toho, co zrovna hrají v kinech). S čím byste potřebovali pomoci?",
+   "input_tokens": 580,
+   "output_tokens": 81,
    "thinking_tokens": 0,
-   "cost_usd": 0.0003911,
-   "latency_s": 1.01
+   "cost_usd": 0.0003765,
+   "latency_s": 0.96
   },
   {
    "id": "gap-01",
@@ -1072,7 +1112,7 @@
    "called": true,
    "tool": "search_movies",
    "args": {
-    "person": "Krzysztof Kieslowski"
+    "person": "Krátký film o lásce"
    },
    "expected": {},
    "errors": [
@@ -1084,11 +1124,11 @@
    "unknown_params": [],
    "ok": false,
    "text": null,
-   "input_tokens": 510,
-   "output_tokens": 21,
+   "input_tokens": 578,
+   "output_tokens": 22,
    "thinking_tokens": 0,
-   "cost_usd": 0.0002055,
-   "latency_s": 1.31
+   "cost_usd": 0.0002284,
+   "latency_s": 0.49
   },
   {
    "id": "gap-02",
@@ -1101,9 +1141,9 @@
    "called": true,
    "tool": "search_movies",
    "args": {
+    "cinema": "now_playing",
     "new_only": false,
-    "country": "CZ",
-    "cinema": "now_playing"
+    "country": "CZ"
    },
    "expected": {
     "cinema": "now_playing"
@@ -1112,11 +1152,11 @@
    "unknown_params": [],
    "ok": true,
    "text": null,
-   "input_tokens": 517,
+   "input_tokens": 585,
    "output_tokens": 30,
    "thinking_tokens": 0,
-   "cost_usd": 0.00023009999999999998,
-   "latency_s": 0.61
+   "cost_usd": 0.0002505,
+   "latency_s": 0.79
   }
  ]
 }

@@ -1,0 +1,4 @@
+# Read by Streamlit from the current directory, so run the app from the repo root:
+#   python -m streamlit run app/main.py
+[theme]
+primaryColor = "#D7263D"  # keep in sync with ACCENT in app/main.py

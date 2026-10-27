@@ -124,7 +124,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
 - **Kill switch přes GCP Spend caps (Billing → Budgets & caps), stejně jako u book_recommenderu.** GCP při dosažení měsíční částky sám pozastaví danou službu, bez vlastního kódu.
   - Omezení: jeden cap platí pro jeden projekt a jednu službu. Podporované jsou Cloud Run, Cloud Run Functions, Gemini API a Vertex AI. Vypnutí není okamžité, takže cap se nastavuje trochu pod skutečný limit a co se utratí navíc, se zaplatí.
   - **Cloud Run** (scraper, později aplikace): cap nastavit hned.
-  - **Vertex AI** (Gemini): cap ve fázi II. Jestli jde v jednom projektu mít druhý budget s capem, se ověří v konzoli.
+  - **Vertex AI** (Gemini): cap ve fázi II (krok 2.7). Druhý budget s capem v jednom projektu jde, každý na jinou službu.
   - BigQuery, Cloud Storage a Cloud Build spend cap nemají. Jsou ve free tieru a hlídá je e-mailový alert v budgetu a `maximum_bytes_billed` u dotazů v BigQuery.
   - Ruční okamžité zastavení: **Cancel** u běžícího spuštění jobu v konzoli (nebo `gcloud run jobs executions cancel`). Vlastní skript na vypínání se nedělá, aby nevznikaly dva systémy vedle sebe.
   - Scraper má navíc vlastní pojistky (`max_runtime_minutes`, circuit breaker po opakovaných chybách), které chrání i TMDB API před zbytečnou zátěží.
@@ -147,7 +147,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] BigQuery: `silver.movies`, čištění a filtr kvality (`sql/02_silver_movies.sql`, krok 1.9)
   - [x] BigQuery: `gold.movies` (`MERGE`) a `gold.movie_snapshots` (`INSERT`) (krok 1.10)
   - [x] Automatizace: Cloud Scheduler (scraper týdně a měsíčně) a Scheduled Query `gold-load` (denně, načte jen nový běh) (krok 1.11)
-  - [x] Budget `films` se spend capem na Cloud Run, 100 Kč měsíčně (krok 1.12)
+  - [x] Budget `films-cloud-run` se spend capem na Cloud Run, 100 Kč měsíčně (krok 1.12)
   - [x] Pojistky ve scraperu (`max_runtime_minutes`, circuit breaker) (krok 1.5)
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
   - [x] Závislosti pro aplikaci a agenta (krok 2.1)
@@ -155,7 +155,9 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Minimální agent: Streamlit chat, Gemini vybírá funkci, jedna funkce `search_by_genre` (krok 2.3)
   - [x] Jedna obecná funkce `search_movies` s filtry (žánry, roky, hodnocení, osoba, kina, premiéra, znovuuvedení, řazení) (krok 2.4)
   - [x] Validace: testy funkce, golden set a evaluace agenta s metrikami, první ladění popisů (krok 2.5)
-  - [x] Úpravy UI: Film Agent, cena v CZK s rozpisem v tooltipu, sbalené detaily volání, indikace práce (krok 2.6)
+  - [x] Úpravy UI: Film Agent, karty dotazů, ukázkové prompty, cena v CZK se součtem session, Clear history, patička s verzí a TMDB (krok 2.6)
+  - [x] Budget `films-vertex` se spend capem na Vertex AI, 50 Kč měsíčně (krok 2.7)
+  - [ ] Plakáty nalezených filmů (`poster_url` z `gold.movies`, TMDB velikost `w185`): nejdřív sloupec s obrázkem v tabulce (`column_config.ImageColumn`), později mřížka karet s přepínačem tabulka / plakáty. Náhradní obrázek pro filmy bez plakátu. Obrázky načítá prohlížeč přímo z TMDB, do modelu nejdou.
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -648,7 +650,7 @@ Pozor: `sql/04_gold_load.sql` je do Scheduled Query zkopírovaný. Po změně so
 Nastaveno ručně v konzoli (Billing → Budgets & caps → Create budget):
 | Pole | Hodnota |
 |---|---|
-| Name | `films` |
+| Name | `films-cloud-run` |
 | Time range | Monthly (spend cap jinak nejde) |
 | Projects | `films (films-512811)` |
 | Services | `Cloud Run (run.googleapis.com)`. Spend cap jde jen na jednu službu, Cloud Run pokrývá scraper a později aplikaci |
@@ -766,7 +768,7 @@ Validace má dvě oddělené části: **funkci** (SQL, bez modelu) a **rozhodnut
 | `tests/test_tools.py` | pytest: `search_movies` proti BigQuery (filtry vracejí správné řádky, `new_only`, `upcoming` od dneška, osoba bez diakritiky, sloupec `match`) a odmítnutí neplatných vstupů | zdarma (free tier BQ) |
 | `tests/golden.jsonl` | golden set: dotaz → očekávané parametry `search_movies` (nebo `null` = nevolat nic). Návrh napsal Claude, schválil uživatel. | – |
 | `tests/eval_agent.py` | pošle každý dotaz z golden setu modelu a porovná volání s očekáváním, vypíše metriky a uloží běh do `tests/runs/` | ≈ 0,5 haléře za dotaz |
-| `tests/baseline.json` | první běh evaluace, výchozí čísla pro porovnání | – |
+| `tests/baseline.json` | uložený běh evaluace, proti kterému se porovnávají další (teď běh 2, 36/37). Posouvá se vědomě, když běh přinese ověřené zlepšení. | – |
 
 ```bash
 python -m pytest tests/test_tools.py          # funkce, zdarma
@@ -783,10 +785,10 @@ python tests/eval_agent.py --tag cinema       # jen případy s tagem
 
 | Běh | Přesná shoda | Vstup / dotaz | Změny |
 |---|---|---|---|
-| baseline | 32/35 (91,4 %) | 506 tokenů | – |
-| 2 | 36/37 (97,3 %) | 574 tokenů | popisy `limit` a `person`, hledání osoby bez diakritiky, sloupec `match`, 2 nové případy |
+| 1 | 32/35 (91,4 %) | 506 tokenů | první běh |
+| 2 (**baseline**) | 36/37 (97,3 %) | 574 tokenů | popisy `limit` a `person`, hledání osoby bez diakritiky, sloupec `match`, 2 nové případy |
 
-Chyby z baseline a co je opravilo:
+Chyby z běhu 1 a co je opravilo:
 - „něco pro děti“ → model přidal `limit=10`, o který nikdo nežádal. Popis `limit` teď říká „jen když uživatel chce konkrétní počet“. „Dej mi 5 westernů“ dál vrací `limit=5`.
 - „filmy od Nolana“ → model doplnil `Christopher Nolan` z vlastní znalosti. U „Andersona“ by hádal mezi Wesem, Paulem Thomasem a dalšími. Popis `person` teď říká „jméno tak, jak ho uživatel napsal, jen v 1. pádě, nic nedoplňovat“. Převod pádu („Tomem Hanksem“ → „Tom Hanks“) je nutný, doplňování ne.
 - Při kontrole se ukázalo, že `person='Kieslowski'` nenašel nic, protože data mají `Kieślowski`. Jména se teď porovnávají bez diakritiky na obou stranách (`NORMALIZE(..., NFD)` a odstranění diakritických znamének).
@@ -804,12 +806,35 @@ Ověřeno 2026-10-27: `test_tools.py` 19/19, evaluace běh 2 36/37 za ≈ 0,20 K
 
 | Prvek | Podoba |
 |---|---|
-| Hlavička | „🎬 Film Agent“, pod ní „Powered by `gemini-3.5-flash-lite`“, vpravo tlačítko **💰 Session cost** (celková cena, počet dotazů a tokenů za session). |
-| Odpověď | tabulka z BigQuery, nad ní sbalené **Call details** s voláním funkce, pod ní `543 tokens · 0.0050 CZK`. Rozpis (input / output / thinking, USD, kurz ČNB) je v tooltipu. |
-| Indikace práce | dotaz se v chatu ukáže hned, pak „Thinking…“ (model) a „Loading from BigQuery…“ (dotaz) |
+| Hlavička | „🎬 Film Agent“ (velký nadpis), pod ním „Powered by `gemini-3.5-flash-lite`“ |
+| Prázdná stránka | karta **💡 Try a prompt** s mřížkou 2 × 2 ukázkových dotazů (*What's in cinemas now*, *Coming to cinemas next week*, *Best rated films of all time*, *Popular comedies*). Klik dotaz odešle, po prvním dotazu karta zmizí. |
+| Dotaz + odpověď | jedna karta se zaoblenými rohy a stínem vpravo dole. V ní tabulka z BigQuery, nad ní sbalené **Call details** s voláním funkce, pod ní `543 tokens · 0.0050 CZK · session 0.0101 CZK` (cena dotazu a součet session až po něj). Rozpis (input / output / thinking, USD, kurz ČNB) je v tooltipu. |
+| Indikace práce | dotaz se ukáže hned, pak „Thinking…“ (model) a „Loading from BigQuery…“ (dotaz) |
+| Spodní lišta (přišpendlená, `st.bottom`) | políčko „💬 Ask anything about films…“ s červeným rámečkem a stínem, pod ním **🗑️ Clear history** (jen když je historie), patička s verzí z `pyproject.toml`, copyrightem a povinným textem TMDB („This product uses the TMDB API but is not endorsed or certified by TMDB“) a zdrojem kurzu (ČNB) |
 
-Hlavička, která by zůstávala nahoře při scrollování (CSS `position: sticky`), byla zkoušená a vrácená, protože nefungovala.
+Hlavní barva `#D7263D` je v `.streamlit/config.toml` (`theme.primaryColor`). Streamlit ten soubor čte ze složky, odkud se aplikace spouští, proto se spouští z kořene repa (`python -m streamlit run app/main.py`). Stejná barva je v `ACCENT` v `main.py` pro CSS rámeček políčka, protože CSS barvu z tématu nepřečte.
+
+Zkoušené a vrácené: hlavička, která zůstává nahoře při scrollování (CSS `position: sticky`), nefungovala. Tlačítko s útratou za session v hlavičce bylo zbytečné, když je součet u každé odpovědi.
 
 UI se dá otestovat bez prohlížeče a bez volání Gemini přes `streamlit.testing.v1.AppTest`, kde se `agent.decide` nahradí pevným rozhodnutím.
 
 Ověřeno 2026-10-27 v prohlížeči.
+
+### Krok 2.7 – Kill switch: spend cap na Vertex AI
+
+Nastaveno ručně v konzoli (Billing → Budgets & caps → Create budget), stejně jako krok 1.12:
+
+| Pole | Hodnota |
+|---|---|
+| Name | `films-vertex` |
+| Time range | Monthly |
+| Projects | `films (films-512811)` |
+| Services | `Vertex AI (aiplatform.googleapis.com)`. **Ne** `Gemini API (generativelanguage.googleapis.com)`, to je cesta přes API klíč z AI Studia, kterou projekt nepoužívá. Gemini voláme přes Vertex (`genai.Client(vertexai=True, …)`), účtuje se tedy pod Vertex AI. |
+| Amount | **50 Kč** měsíčně, spend cap zapnutý |
+| Alerty | 50 %, 80 % a 100 % |
+
+50 Kč je asi 9 000 dotazů (≈ 0,55 haléře) nebo 250 běhů evaluace (≈ 20 haléřů). Při dosažení částky GCP pozastaví Vertex AI v projektu a aplikace hlásí chybu u každého dotazu. BigQuery a Cloud Run tím zasažené nejsou. Před zveřejněním aplikace na Cloud Runu je potřeba limit a přístup k aplikaci znovu promyslet.
+
+V projektu jsou teď dva budgety s capem: `films-cloud-run` (Cloud Run, 100 Kč) a `films-vertex` (Vertex AI, 50 Kč).
+
+Ověřeno 2026-10-27: budget v konzoli ukazoval útratu Vertex AI ≈ 0,42 Kč, což odpovídá součtu odhadů z aplikace a evaluací za den.
