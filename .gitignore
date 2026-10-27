@@ -13,3 +13,6 @@ __pycache__/
 # Secrets
 .env
 *.json.key
+
+# Evaluation runs (tests/baseline.json is kept)
+tests/runs/

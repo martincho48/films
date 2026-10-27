@@ -37,7 +37,7 @@ def _ai() -> genai.Client:
     return _client
 
 
-def _config() -> types.GenerateContentConfig:
+def _config(today: date | None = None) -> types.GenerateContentConfig:
     declarations = [
         types.FunctionDeclaration(
             name=name,
@@ -48,7 +48,7 @@ def _config() -> types.GenerateContentConfig:
     ]
     # today's date lets the model turn 'next week' etc. into YYYY-MM-DD
     return types.GenerateContentConfig(
-        system_instruction=f"{SYSTEM} Today is {date.today():%A, %Y-%m-%d}.",
+        system_instruction=f"{SYSTEM} Today is {today or date.today():%A, %Y-%m-%d}.",
         tools=[types.Tool(function_declarations=declarations)],
         tool_config=types.ToolConfig(function_calling_config=types.FunctionCallingConfig(mode="AUTO")),
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
@@ -72,8 +72,9 @@ class Decision:
                 + billed_output * PRICE_USD_PER_1M["output"]) / 1_000_000
 
 
-def decide(question: str) -> Decision:
-    resp = _ai().models.generate_content(model=MODEL, contents=question, config=_config())
+def decide(question: str, today: date | None = None) -> Decision:
+    """today: fixed date for evaluation, so relative dates in the golden set stay valid."""
+    resp = _ai().models.generate_content(model=MODEL, contents=question, config=_config(today))
     usage = resp.usage_metadata
     tokens = (usage.prompt_token_count or 0, usage.candidates_token_count or 0, usage.thoughts_token_count or 0)
     calls = resp.function_calls or []

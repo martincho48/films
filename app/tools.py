@@ -99,6 +99,14 @@ def search_movies(
     premiere = CINEMA[country]["premiere"]
     # release_date = first release anywhere (TMDB), i.e. the year the film was made
     rerelease = f"IFNULL(release_date < DATE_SUB(CURRENT_DATE(), INTERVAL {RERELEASE_YEARS} YEAR), FALSE)"
+    # people of the film with their role; names compared lowercase and without diacritics
+    # on both sides, so 'Kieslowski' finds 'Kieślowski' and 'sverak' finds 'Svěrák'
+    people = """(
+        SELECT d AS name, 'režie' AS role FROM UNNEST(directors) d
+        UNION ALL SELECT w, 'scénář' FROM UNNEST(writers) w
+        UNION ALL SELECT c.name, 'herec' FROM UNNEST(top_cast) c)"""
+    fold = lambda x: rf"REGEXP_REPLACE(NORMALIZE(LOWER({x}), NFD), r'\p{{M}}', '')"  # noqa: E731
+    person_match = f"{fold('name')} LIKE CONCAT('%', {fold('@person')}, '%')"
 
     where = ["in_catalog"]
     params = [bigquery.ScalarQueryParameter("limit", "INT64", limit)]
@@ -118,10 +126,8 @@ def search_movies(
     if min_rating is not None or sort_by == "rating":
         where.append(f"vote_count >= {MIN_VOTES}")
     if person:
-        # substring, case-insensitive: 'Nolan' finds Christopher and Jonathan Nolan
-        where.append("""EXISTS (
-            SELECT 1 FROM UNNEST(ARRAY_CONCAT(directors, writers, ARRAY(SELECT c.name FROM UNNEST(top_cast) c))) n
-            WHERE LOWER(n) LIKE CONCAT('%', LOWER(@person), '%'))""")
+        # part of the name: 'Nolan' finds Christopher Nolan and also Nolan North
+        where.append(f"EXISTS (SELECT 1 FROM {people} WHERE {person_match})")
         params.append(bigquery.ScalarQueryParameter("person", "STRING", person.strip()))
     if cinema:
         where.append(CINEMA[country][cinema])
@@ -144,8 +150,12 @@ def search_movies(
         raise ValueError(f"unknown sort_by {sort_by!r}")
 
     cinema_cols = f"{premiere} AS premiere, {rerelease} AS rerelease," if cinema else ""
+    # who matched person and in which role, e.g. 'Christopher Nolan (režie, scénář)'
+    match_col = f"""ARRAY_TO_STRING(ARRAY(
+            SELECT FORMAT('%s (%s)', name, STRING_AGG(DISTINCT role, ', '))
+            FROM {people} WHERE {person_match} GROUP BY name), '; ') AS `match`,""" if person else ""
     sql = f"""
-        SELECT title, EXTRACT(YEAR FROM release_date) AS year, {cinema_cols}
+        SELECT title, EXTRACT(YEAR FROM release_date) AS year, {cinema_cols} {match_col}
                vote_average, vote_count, genres, directors, overview
         FROM {MOVIES}
         WHERE {' AND '.join(where)}
@@ -175,7 +185,14 @@ TOOLS = {
                     "year_from": {"type": "integer", "description": "Film made in this year or later. E.g. '90s' -> 1990."},
                     "year_to": {"type": "integer", "description": "Film made in this year or earlier. E.g. '90s' -> 1999."},
                     "min_rating": {"type": "number", "description": "Minimum average rating on a 0-10 scale."},
-                    "person": {"type": "string", "description": "Name of a director, writer or actor, as the user wrote it."},
+                    "person": {
+                        "type": "string",
+                        "description": (
+                            "Name of a director, writer or actor exactly as the user wrote it, only converted to the "
+                            "basic form (nominative): 'Nolana' -> 'Nolan', 'Tomem Hanksem' -> 'Tom Hanks'. "
+                            "Do not add first names or guess who is meant."
+                        ),
+                    },
                     "cinema": {
                         "type": "string",
                         "enum": ["now_playing", "upcoming"],
@@ -205,7 +222,13 @@ TOOLS = {
                         "enum": ["popularity", "rating", "premiere", "year"],
                         "description": "popularity (default) = what people watch now, rating = best rated, premiere = nearest cinema premiere first, year = newest films first.",
                     },
-                    "limit": {"type": "integer", "description": f"How many movies to return, 1-{MAX_LIMIT}. Default 20."},
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            f"How many movies to return, 1-{MAX_LIMIT}. Only when the user asks for a specific number "
+                            "(e.g. 'dej mi 5 westernů' -> 5). Otherwise leave it out."
+                        ),
+                    },
                 },
             },
         },

@@ -154,6 +154,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Vertex AI API a lokální přihlášení přes ADC (krok 2.2)
   - [x] Minimální agent: Streamlit chat, Gemini vybírá funkci, jedna funkce `search_by_genre` (krok 2.3)
   - [x] Jedna obecná funkce `search_movies` s filtry (žánry, roky, hodnocení, osoba, kina, premiéra, znovuuvedení, řazení) (krok 2.4)
+  - [x] Validace: testy funkce, golden set a evaluace agenta s metrikami, první ladění popisů (krok 2.5)
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -754,3 +755,44 @@ Model v systémové instrukci dostává dnešní datum, takže si „příští 
 **Past: Streamlit po změně `tools.py` nebo `agent.py` restartovat** (Ctrl+C a znovu spustit). Rerun v prohlížeči znovu spustí jen `main.py`, importované moduly zůstanou staré a model dostává staré popisy funkcí.
 
 Ověřeno 2026-10-27: SQL pro kombinace (žánry + roky + řazení, osoba, kina + `new_only`, premiéra v rozsahu, US) a odmítnutí neplatných vstupů přímo proti BigQuery. V aplikaci dotaz na horory v kinech → `search_movies(genres=['Horror'], country='CZ', cinema='now_playing')`, 512 vstupních a 31 výstupních tokenů, ≈ 0,5 haléře za dotaz.
+
+### Krok 2.5 – Validace agenta
+
+Validace má dvě oddělené části: **funkci** (SQL, bez modelu) a **rozhodnutí modelu** (dotaz → parametry, bez BigQuery).
+
+| Soubor | Co dělá | Cena |
+|---|---|---|
+| `tests/test_tools.py` | pytest: `search_movies` proti BigQuery (filtry vracejí správné řádky, `new_only`, `upcoming` od dneška, osoba bez diakritiky, sloupec `match`) a odmítnutí neplatných vstupů | zdarma (free tier BQ) |
+| `tests/golden.jsonl` | golden set: dotaz → očekávané parametry `search_movies` (nebo `null` = nevolat nic). Návrh napsal Claude, schválil uživatel. | – |
+| `tests/eval_agent.py` | pošle každý dotaz z golden setu modelu a porovná volání s očekáváním, vypíše metriky a uloží běh do `tests/runs/` | ≈ 0,5 haléře za dotaz |
+| `tests/baseline.json` | první běh evaluace, výchozí čísla pro porovnání | – |
+
+```bash
+python -m pytest tests/test_tools.py          # funkce, zdarma
+python tests/eval_agent.py                    # agent nad golden setem
+python tests/eval_agent.py --repeat 3         # stabilita: každý dotaz 3×
+python tests/eval_agent.py --tag cinema       # jen případy s tagem
+```
+
+**Golden řádek:** `{"id", "q", "expect" | "any_of", "ignore"?, "tags", "note"?}`. `expect` jsou parametry, které model musí vrátit, `any_of` víc přijatelných odpovědí u nejednoznačných dotazů (např. „něco pro děti“ = `Family` nebo `Animation`), `ignore` parametry, na kterých v daném případě nezáleží. Cokoli dalšího je chyba, kromě výchozích hodnot (`country='CZ'`, `limit=20`, `new_only=false`, výchozí `sort_by`). Seznamy se porovnávají jako množiny, `person` bez ohledu na velikost písmen. Relativní data („příští týden“) jsou napsaná pro 2026-10-27, evaluace proto modelu posílá tohle datum jako dnešek (`decide(q, today=...)`).
+
+**Metriky:** přesná shoda (všechny parametry správně), volat / nevolat (precision, recall), vymyšlené parametry (mimo schéma), úspěšnost po parametrech (správně / chybí / špatně / navíc), stabilita při `--repeat`, cena a latence. Nejdůležitější je úspěšnost po parametrech, protože ukáže, který popis upravit.
+
+**Ladění = upravit popis, pustit znovu, porovnat:**
+
+| Běh | Přesná shoda | Vstup / dotaz | Změny |
+|---|---|---|---|
+| baseline | 32/35 (91,4 %) | 506 tokenů | – |
+| 2 | 36/37 (97,3 %) | 574 tokenů | popisy `limit` a `person`, hledání osoby bez diakritiky, sloupec `match`, 2 nové případy |
+
+Chyby z baseline a co je opravilo:
+- „něco pro děti“ → model přidal `limit=10`, o který nikdo nežádal. Popis `limit` teď říká „jen když uživatel chce konkrétní počet“. „Dej mi 5 westernů“ dál vrací `limit=5`.
+- „filmy od Nolana“ → model doplnil `Christopher Nolan` z vlastní znalosti. U „Andersona“ by hádal mezi Wesem, Paulem Thomasem a dalšími. Popis `person` teď říká „jméno tak, jak ho uživatel napsal, jen v 1. pádě, nic nedoplňovat“. Převod pádu („Tomem Hanksem“ → „Tom Hanks“) je nutný, doplňování ne.
+- Při kontrole se ukázalo, že `person='Kieslowski'` nenašel nic, protože data mají `Kieślowski`. Jména se teď porovnávají bez diakritiky na obou stranách (`NORMALIZE(..., NFD)` a odstranění diakritických znamének).
+- Hledání podle části jména najde i shody, které uživatel nemyslel: „Nolan“ najde i dabéra *Nolan North*. Sloupec `match` proto ukazuje, kdo odpovídá a v jaké roli („Christopher Nolan (režie, scénář)“, „Nolan North (herec)“).
+
+Zbývající chyba `gap-01` („o čem je film Krátký film o lásce?“) je mezera, ne chyba popisu: funkce neumí hledat podle názvu a model pak použije nejbližší parametr (`person`). Řešení je parametr `title`.
+
+Pravidlo: změna agenta (popis, parametr, model, systémová instrukce) se commitne, jen když evaluace neukáže zhoršení proti baseline. Později to bude brána v GitHub Actions před nasazením.
+
+Ověřeno 2026-10-27: `test_tools.py` 19/19, evaluace běh 2 36/37 za ≈ 0,20 Kč.
