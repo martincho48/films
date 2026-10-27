@@ -3,14 +3,19 @@ name = "films"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "db-dtypes>=1.9.0",
+    "google-cloud-bigquery>=3.46.2",
+    "google-genai>=2.33.0",
     "ipykernel>=7.4.0",
     "matplotlib>=3.11.2",
     "pandas>=3.1.0",
     "pyarrow>=26.0.0",
+    "streamlit>=1.66.1",
 ]
 
 [dependency-groups]
 dev = [
     "nbclient>=0.11.0",
     "nbformat>=5.11.1",
+    "pytest>=9.1.1",
 ]

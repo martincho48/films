@@ -150,6 +150,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Budget `films` se spend capem na Cloud Run, 100 Kč měsíčně (krok 1.12)
   - [x] Pojistky ve scraperu (`max_runtime_minutes`, circuit breaker) (krok 1.5)
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
+  - [x] Závislosti pro aplikaci a agenta (krok 2.1)
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -651,3 +652,15 @@ Nastaveno ručně v konzoli (Billing → Budgets & caps → Create budget):
 Při dosažení částky GCP pozastaví Cloud Run (scraper i budoucí aplikaci). Vypnutí není okamžité a útrata nad limit se doplatí. BigQuery, Cloud Storage a Cloud Build spend cap nemají, jsou ve free tieru. Cap pro Vertex AI (Gemini) přibude ve fázi II.
 
 **Druhý bucket `run-sources-films-512811-us-central1`** vytvořil automaticky `gcloud run jobs deploy --source`. Ukládá zazipované zdrojáky z každého nasazení (~16 kB), ze kterých Cloud Build sestaví image. Nemazat, `gcloud` ho používá při každém nasazení.
+
+### Krok 2.1 – Závislosti pro aplikaci a agenta
+
+Do `pyproject.toml` přibyly `google-cloud-bigquery` a `db-dtypes` (dotazy do BigQuery do pandas), `google-genai` (Gemini, function calling) a `streamlit`. Do skupiny `dev` přibyl `pytest` (validace funkcí).
+
+```powershell
+$env:UV_PROJECT_ENVIRONMENT = "C:\Users\mabilek\uv_all_venvs\uv_films"
+uv sync
+python -c "import streamlit, google.genai, google.cloud.bigquery, db_dtypes, pytest"
+```
+
+Ověřeno 2026-10-27: streamlit 1.66.1, google-genai 2.33.0, google-cloud-bigquery 3.46.2, pytest 9.1.1.
