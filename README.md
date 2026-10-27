@@ -151,6 +151,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Pojistky ve scraperu (`max_runtime_minutes`, circuit breaker) (krok 1.5)
 - [ ] **Fáze II:** Streamlit aplikace a Gemini agent s function callingem nad BigQuery, vyvíjené lokálně proti Vertex AI v GCP
   - [x] Závislosti pro aplikaci a agenta (krok 2.1)
+  - [x] Vertex AI API a lokální přihlášení přes ADC (krok 2.2)
 - [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
@@ -664,3 +665,28 @@ python -c "import streamlit, google.genai, google.cloud.bigquery, db_dtypes, pyt
 ```
 
 Ověřeno 2026-10-27: streamlit 1.66.1, google-genai 2.33.0, google-cloud-bigquery 3.46.2, pytest 9.1.1.
+
+### Krok 2.2 – Vertex AI a přihlášení pro Python
+
+Gemini se volá přes **Vertex AI**, ne přes API klíč z AI Studia. Přihlášení je stejné jako u BigQuery, takže v projektu není žádný klíč navíc. Platí se jen za tokeny, zapnutí API je zdarma.
+
+```powershell
+gcloud services enable aiplatform.googleapis.com --project=films-512811
+```
+
+Ověřeno 2026-10-27: `aiplatform.googleapis.com` je v projektu zapnuté.
+
+**`gcloud` má dvě oddělená přihlášení:**
+
+| Přihlášení | Příkaz | Kdo ho používá |
+|---|---|---|
+| Pro příkazovou řádku | `gcloud auth login` | Příkazy `gcloud` a `bq` v terminálu |
+| Pro aplikace (ADC, Application Default Credentials) | `gcloud auth application-default login` | Python knihovny (`google-cloud-bigquery`, `google-genai`) spuštěné lokálně |
+
+Fáze I běžela jen přes `gcloud` a `bq` a scraper na cloudu pod service accountem, takže ADC nebylo potřeba. Pro lokální vývoj aplikace ano. ADC se ukládá do `%APPDATA%\gcloud\application_default_credentials.json`, a pokud soubor neexistuje, Python knihovny hlásí chybu přihlášení, i když `gcloud` v terminálu funguje.
+
+Na Cloud Runu se ADC nepoužívá. Aplikace tam běží pod vlastním service accountem a knihovny si ho najdou samy, kód zůstává stejný.
+
+Na souhlasové stránce Googlu je potřeba zaškrtnout oprávnění pro Google Cloud (nejjednodušší je **Select all**). Bez něj přihlášení skončí chybou `cloud-platform scope is required but not consented`. Po úspěšném přihlášení `gcloud` nastaví `films-512811` jako quota project.
+
+Ověřeno 2026-10-27 z Pythonu ve venvu `uv_films` (oba dotazy jsou zdarma): BigQuery klient vrátil 11 927 řádků z `gold.movies` a `genai.Client(vertexai=True, project="films-512811", location="us-central1")` vypsal 35 dostupných modelů Gemini.
