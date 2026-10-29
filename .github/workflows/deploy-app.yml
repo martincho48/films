@@ -1,0 +1,121 @@
+# Streamlit app -> Cloud Run. Builds the image here on GitHub (no local Docker needed).
+#
+# Push to main that changes the app: tests and evaluation only if switched on in
+#   Settings -> Secrets and variables -> Actions -> Variables (RUN_TESTS, RUN_EVAL),
+#   then build, push and deploy.
+# Run workflow button (Actions tab): the checkboxes decide about tests and evaluation.
+#
+# Login to GCP: Workload Identity Federation, no keys (README step 3.4). It only
+# accepts this repository and branch main, so runs from other branches fail at login.
+
+name: deploy-app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "tests/**"
+      - ".streamlit/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/deploy-app.yml"
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Run tool tests against BigQuery (free)"
+        type: boolean
+        default: false
+      run_eval:
+        description: "Run agent evaluation on the golden set (Gemini, ~0.20 CZK)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write  # lets GitHub issue the OIDC token for WIF
+
+# one deploy at a time, a newer push waits instead of racing
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
+env:
+  PROJECT: films-512811
+  REGION: us-central1
+  SERVICE: films-app
+  RUNTIME_SA: films-app@films-512811.iam.gserviceaccount.com
+  IMAGE: us-central1-docker.pkg.dev/films-512811/cloud-run-source-deploy/films-app
+
+jobs:
+  test:
+    if: (github.event_name == 'push' && vars.RUN_TESTS == 'true') || inputs.run_tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --frozen --no-group eda
+      - run: uv run pytest tests/test_tools.py
+
+  eval:
+    if: (github.event_name == 'push' && vars.RUN_EVAL == 'true') || inputs.run_eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # full history, to see which files the push changed
+      # On push only when the agent changed; the button always runs it
+      - id: changed
+        run: |
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" \
+               | grep -qE '^(app/tools\.py|app/agent\.py|tests/golden\.jsonl|tests/baseline\.json)$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Agent not changed, evaluation skipped."
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+      - if: steps.changed.outputs.run == 'true'
+        uses: astral-sh/setup-uv@v7
+      - if: steps.changed.outputs.run == 'true'
+        run: uv sync --frozen --no-group eda
+      - if: steps.changed.outputs.run == 'true'
+        run: uv run python tests/eval_agent.py --gate
+
+  deploy:
+    needs: [test, eval]
+    # skipped test / eval are fine, failed ones stop the deploy
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - run: docker build -t "$IMAGE:${{ github.sha }}" .
+      - run: docker push "$IMAGE:${{ github.sha }}"
+      # No --allow-unauthenticated / --no-allow-unauthenticated: who may open the app
+      # is set by hand (README), github-deployer has run.developer and cannot change it.
+      - run: >
+          gcloud run deploy "$SERVICE"
+          --project "$PROJECT" --region "$REGION"
+          --image "$IMAGE:${{ github.sha }}"
+          --service-account "$RUNTIME_SA"
+          --port 8080 --memory 1Gi --cpu 1
+          --min-instances 0 --max-instances 1
+          --quiet

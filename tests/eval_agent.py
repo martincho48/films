@@ -7,6 +7,7 @@ BigQuery is not called, only the model's decision is checked. Costs tokens
     python tests/eval_agent.py               # all cases
     python tests/eval_agent.py --repeat 3    # each case 3x, measures stability
     python tests/eval_agent.py --tag cinema  # only cases with this tag
+    python tests/eval_agent.py --gate        # exit 1 if exact match is below tests/baseline.json (CI)
 
 Golden line: {"id", "q", "expect" | "any_of", "ignore"?, "tags", "note"?}
   expect   expected arguments of search_movies, null = no tool call
@@ -31,6 +32,7 @@ from agent import MODEL, decide  # noqa: E402
 from tools import TOOLS  # noqa: E402
 
 GOLDEN = Path(__file__).with_name("golden.jsonl")
+BASELINE = Path(__file__).with_name("baseline.json")
 RUNS = Path(__file__).with_name("runs")
 TODAY = date(2026, 10, 27)  # the golden set's relative dates ('next week') are written for this day
 TOOL = "search_movies"
@@ -170,6 +172,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--tag")
+    ap.add_argument("--gate", action="store_true", help="fail if exact match is below the baseline")
     a = ap.parse_args()
 
     cases = [json.loads(line) for line in GOLDEN.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -189,6 +192,14 @@ def main() -> None:
     out.write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1, default=str),
                    encoding="utf-8")
     print(f"\nuloženo {out.relative_to(Path.cwd()) if out.is_relative_to(Path.cwd()) else out}")
+
+    if a.gate:
+        # percent, not count, so adding golden cases does not break the comparison
+        base = json.loads(BASELINE.read_text(encoding="utf-8"))["summary"]["exact_match_pct"]
+        now = summary["exact_match_pct"]
+        print(f"\nbrána: {now} % proti baseline {base} % → {'OK' if now >= base else 'HORŠÍ'}")
+        if now < base:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
