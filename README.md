@@ -158,11 +158,17 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Úpravy UI: Film Agent, karty dotazů, ukázkové prompty, cena v CZK se součtem session, Clear history, patička s verzí a TMDB (krok 2.6)
   - [x] Budget `films-vertex` se spend capem na Vertex AI, 50 Kč měsíčně (krok 2.7)
   - [ ] Plakáty nalezených filmů (`poster_url` z `gold.movies`, TMDB velikost `w185`): nejdřív sloupec s obrázkem v tabulce (`column_config.ImageColumn`), později mřížka karet s přepínačem tabulka / plakáty. Náhradní obrázek pro filmy bez plakátu. Obrázky načítá prohlížeč přímo z TMDB, do modelu nejdou.
-- [ ] **Fáze III:** Dockerfile a nasazení aplikace na Cloud Run. Image staví GitHub Actions, lokální Docker se neinstaluje.
+- [x] **Fáze III:** Dockerfile a nasazení aplikace na Cloud Run. Image staví GitHub Actions, lokální Docker se neinstaluje. (hotovo 2026-10-29)
+  - [x] Dockerfile a `.dockerignore`, závislosti pro EDA v samostatné skupině (krok 3.1)
   - [x] Service account `films-app` pro aplikaci: čtení `gold`, dotazy do BigQuery, Gemini (krok 3.2)
   - [x] Service account `github-deployer` pro GitHub Actions: nasazení aplikace, testy a evaluace (krok 3.3)
   - [x] Workload Identity Federation: přihlášení GitHub Actions do GCP bez klíčů, jen repo `martincho48/films` a větev `main` (krok 3.4)
-- [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
+  - [x] Workflow `deploy-app.yml`: build, push, deploy na Cloud Run, volitelné testy a evaluace s bránou proti baseline. Aplikace běží neveřejně. (krok 3.5)
+- [ ] **Fáze IV:** CI/CD pro zbytek projektu
+  - [ ] `deploy-scraper.yml` (`scraper/**` → image, Cloud Run Job `films-scraper`)
+  - [ ] `deploy-sql.yml` (`sql/**` → dry run, nasazení SQL)
+  - [ ] Zapnout testy a evaluaci v `deploy-app.yml` (`RUN_TESTS`, `RUN_EVAL`)
+  - [ ] Zveřejnění aplikace: atribuce TMDB s logem, limity nákladů, `allUsers` jako `run.invoker`
 
 ## Analýza starého scrapingu (`old/`)
 
@@ -842,6 +848,23 @@ V projektu jsou teď dva budgety s capem: `films-cloud-run` (Cloud Run, 100 Kč)
 
 Ověřeno 2026-10-27: budget v konzoli ukazoval útratu Vertex AI ≈ 0,42 Kč, což odpovídá součtu odhadů z aplikace a evaluací za den.
 
+### Krok 3.1 – Dockerfile pro aplikaci
+
+Image aplikace staví **GitHub Actions** (jejich runnery mají Docker předinstalovaný). Lokálně se Docker neinstaluje, aplikace se lokálně spouští dál přes `python -m streamlit run app/main.py`.
+
+| Soubor | Obsah |
+|---|---|
+| `Dockerfile` | `python:3.12-slim`, `uv` 0.11.16 zkopírované z oficiálního image, závislosti přes `uv sync --frozen --no-default-groups` přesně podle `uv.lock`, Streamlit na portu 8080 (ten Cloud Run očekává), headless, bez telemetrie |
+| `.dockerignore` | do image jde jen `pyproject.toml`, `uv.lock`, `.streamlit/` a `app/`. `old/`, `eda/`, `scraper/`, `data/`, `tests/` zůstávají venku. |
+
+`pyproject.toml` musí být v image, protože z něj `main.py` čte verzi do patičky. `.streamlit/config.toml` se čte z pracovní složky (`/app`), proto se kopíruje vedle `app/`.
+
+Závislosti se kopírují a instalují **před** kódem. Docker si vrstvy pamatuje, takže změna v `app/` nepřeinstalovává knihovny, a v Artifact Registry je velká vrstva se závislostmi uložená jen jednou pro všechny verze.
+
+**Skupiny závislostí:** `ipykernel` a `matplotlib` jsou jen pro notebooky v `eda/`, proto jsou ve skupině `eda`. Lokální `uv sync` instaluje všechno (`default-groups = ["dev", "eda"]`), image jen hlavní závislosti (`--no-default-groups`).
+
+Ověřeno 2026-10-29: stejný `uv sync` jako v Dockerfilu do zkušebního venvu nainstaloval 62 balíčků, `streamlit`, `tools` a `agent` se naimportují, `matplotlib` v něm není. Build image prošel v GitHub Actions (krok 3.5).
+
 ### Krok 3.2 – Service account pro aplikaci
 
 Aplikace na Cloud Runu potřebuje číst BigQuery a volat Gemini. Nepřihlašuje se heslem ani klíčem, ale běží pod **service accountem** `films-app`. Lokálně běží pod tvým přihlášením (ADC, krok 2.2), na Cloud Runu pod `films-app`. Kód je stejný, knihovny si přihlášení najdou samy.
@@ -963,4 +986,70 @@ gcloud iam service-accounts add-iam-policy-binding github-deployer@films-512811.
 
 `188138853287` je číslo projektu `films-512811` (vidět je i ve jménu výchozího compute účtu). Workflow potřebuje plné jméno provideru: `projects/188138853287/locations/global/workloadIdentityPools/github/providers/github-films`.
 
-Ověřeno 2026-10-29: API zapnuté, pool i provider ve stavu `ACTIVE` s podmínkou výše, binding na `github-deployer` existuje. Skutečné přihlášení z GitHubu ověří první běh workflow.
+Ověřeno 2026-10-29: API zapnuté, pool i provider ve stavu `ACTIVE` s podmínkou výše, binding na `github-deployer` existuje. Přihlášení z GitHubu fungovalo hned při prvním běhu workflow (krok 3.5).
+
+### Krok 3.5 – Workflow `deploy-app.yml`: nasazení aplikace na Cloud Run
+
+`.github/workflows/deploy-app.yml` se spustí při pushi do `main`, který mění aplikaci (`app/`, `tests/`, `.streamlit/`, `Dockerfile`, `.dockerignore`, `pyproject.toml`, `uv.lock` nebo samotné workflow), nebo ručně tlačítkem **Run workflow** v záložce Actions. Změna jen v README ho nespustí.
+
+```mermaid
+flowchart LR
+    PUSH["git push do main"] --> T{"RUN_TESTS?"}
+    PUSH --> E{"RUN_EVAL?<br/>a změna agenta"}
+    T -- ano --> TEST["test<br/>pytest proti BigQuery"]
+    E -- ano --> EVAL["eval<br/>golden set, brána proti baseline"]
+    TEST --> D
+    EVAL --> D
+    T -- ne --> D
+    E -- ne --> D
+    D["deploy<br/>docker build → Artifact Registry<br/>→ gcloud run deploy"] --> RUN["Cloud Run films-app<br/>neveřejně"]
+```
+
+| Job | Kdy běží | Co dělá |
+|---|---|---|
+| `test` | proměnná `RUN_TESTS=true`, nebo zaškrtnuto u Run workflow | `uv run pytest tests/test_tools.py` proti BigQuery (zdarma) |
+| `eval` | `RUN_EVAL=true` a push změnil `app/tools.py`, `app/agent.py`, `tests/golden.jsonl` nebo `tests/baseline.json`. U Run workflow se zaškrtnutím vždy. | `uv run python tests/eval_agent.py --gate` (≈ 0,20 Kč) |
+| `deploy` | vždy, pokud `test` ani `eval` neselhal (přeskočené nevadí) | build image označeného hashem commitu, push do Artifact Registry, `gcloud run deploy` |
+
+**Zapínání testů a evaluace bez změny kódu:** GitHub → Settings → Secrets and variables → Actions → **Variables**:
+
+| Proměnná | Hodnota | Účel |
+|---|---|---|
+| `WIF_PROVIDER` | `projects/188138853287/locations/global/workloadIdentityPools/github/providers/github-films` | kam se workflow přihlašuje (krok 3.4) |
+| `DEPLOYER_SA` | `github-deployer@films-512811.iam.gserviceaccount.com` | jako kdo (krok 3.3) |
+| `RUN_TESTS` | `false` | `true` = testy funkce při každém pushi |
+| `RUN_EVAL` | `false` | `true` = evaluace při změně agenta |
+
+Hodnoty jsou ve **Variables**, ne v Secrets, protože nejsou tajné: bez povolení ve WIF jsou k ničemu. V repu ani na GitHubu není žádný klíč.
+
+**Brána evaluace** (`eval_agent.py --gate`): když je přesná shoda v procentech nižší než v `tests/baseline.json` (teď 97,3 %), skript skončí chybou a deploy neproběhne. Porovnávají se procenta, ne počty, aby přidání golden případů nerozbilo srovnání. Na Cloud Runu pak zůstane poslední funkční verze.
+
+**Nastavení služby `films-app` na Cloud Runu:**
+
+| Parametr | Hodnota | Proč |
+|---|---|---|
+| region | `us-central1` | stejně jako data a Artifact Registry |
+| `--service-account` | `films-app` | aplikace běží s právy z kroku 3.2 |
+| `--min-instances` / `--max-instances` | 0 / 1 | bez návštěv nic neběží a neplatí se, víc než jedna instance nevznikne |
+| `--memory` / `--cpu` | 1 GiB / 1 | Streamlit + pandas + pyarrow |
+| image | `us-central1-docker.pkg.dev/films-512811/cloud-run-source-deploy/films-app:<commit>` | vidět, který commit běží. Repo drží 3 poslední verze každého image (krok 1.7), starší revize jdou použít pro návrat zpět. |
+| `--provenance=false` u `docker build` | | jinak Docker ke každému image přidá metadata o buildu jako další 2 verze a pravidlo „drž 3“ by drželo jen jeden deploy |
+
+**Přístup k aplikaci:** služba je **neveřejná**. Workflow nepoužívá `--allow-unauthenticated` ani `--no-allow-unauthenticated` a `github-deployer` s rolí `run.developer` přístup ani změnit nemůže. Přímé otevření URL vrátí `403 Forbidden`. Pro sebe aplikaci otevřeš přes proxy, která přidá tvoje přihlášení:
+
+```bash
+gcloud run services proxy films-app --region us-central1 --project films-512811
+# → http://localhost:8080, zastavení Ctrl+C
+```
+
+Poprvé se `gcloud` zeptá na instalaci komponenty `cloud-run-proxy` (12,5 MiB), dvakrát `Y`. První načtení trvá pár sekund, instance se probouzí z nuly.
+
+**Zveřejnění později** je jeden příkaz (a vrací se přes `remove-iam-policy-binding`). Předtím je potřeba atribuce TMDB s logem a znovu promyslet limity nákladů:
+
+```bash
+gcloud run services add-iam-policy-binding films-app --region us-central1 --member=allUsers --role=roles/run.invoker
+```
+
+**Logy:** build a deploy v záložce Actions na GitHubu, běžící aplikace v GCP Console → Cloud Run → `films-app` → Logs.
+
+Ověřeno 2026-10-29: první běh workflow (commit `4ac4f68`) prošel napoprvé, `test` a `eval` přeskočené, `deploy` hotový. Služba `films-app` je `Ready`, běží pod `films-app@…`, 1 CPU, 1 GiB, max 1 instance, IAM politika služby je prázdná (neveřejná). Přes proxy aplikace odpověděla na dotaz z BigQuery i Gemini. Artifact Registry má po prvním buildu 312 MB (scraper + aplikace), v limitu 0,5 GB zdarma.

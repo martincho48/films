@@ -107,7 +107,9 @@ jobs:
           service_account: ${{ vars.DEPLOYER_SA }}
       - uses: google-github-actions/setup-gcloud@v3
       - run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-      - run: docker build -t "$IMAGE:${{ github.sha }}" .
+      # --provenance=false: one manifest per image. With build metadata each push adds
+      # 3 versions to Artifact Registry and the keep-3 cleanup would keep only one deploy.
+      - run: docker build --provenance=false -t "$IMAGE:${{ github.sha }}" .
       - run: docker push "$IMAGE:${{ github.sha }}"
       # No --allow-unauthenticated / --no-allow-unauthenticated: who may open the app
       # is set by hand (README), github-deployer has run.developer and cannot change it.
