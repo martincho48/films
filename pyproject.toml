@@ -6,8 +6,6 @@ dependencies = [
     "db-dtypes>=1.9.0",
     "google-cloud-bigquery>=3.46.2",
     "google-genai>=2.33.0",
-    "ipykernel>=7.4.0",
-    "matplotlib>=3.11.2",
     "pandas>=3.1.0",
     "pyarrow>=26.0.0",
     "streamlit>=1.66.1",
@@ -19,6 +17,15 @@ dev = [
     "nbformat>=5.11.1",
     "pytest>=9.1.1",
 ]
+# Notebooks in eda/, not needed by the app image
+eda = [
+    "ipykernel>=7.4.0",
+    "matplotlib>=3.11.2",
+]
+
+[tool.uv]
+# Local `uv sync` installs everything; the Docker image uses --no-default-groups
+default-groups = ["dev", "eda"]
 
 [tool.pytest.ini_options]
 pythonpath = ["app"]

@@ -554,8 +554,6 @@ dependencies = [
     { name = "db-dtypes" },
     { name = "google-cloud-bigquery" },
     { name = "google-genai" },
-    { name = "ipykernel" },
-    { name = "matplotlib" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "streamlit" },
@@ -567,14 +565,16 @@ dev = [
     { name = "nbformat" },
     { name = "pytest" },
 ]
+eda = [
+    { name = "ipykernel" },
+    { name = "matplotlib" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "db-dtypes", specifier = ">=1.9.0" },
     { name = "google-cloud-bigquery", specifier = ">=3.46.2" },
     { name = "google-genai", specifier = ">=2.33.0" },
-    { name = "ipykernel", specifier = ">=7.4.0" },
-    { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "pandas", specifier = ">=3.1.0" },
     { name = "pyarrow", specifier = ">=26.0.0" },
     { name = "streamlit", specifier = ">=1.66.1" },
@@ -585,6 +585,10 @@ dev = [
     { name = "nbclient", specifier = ">=0.11.0" },
     { name = "nbformat", specifier = ">=5.11.1" },
     { name = "pytest", specifier = ">=9.1.1" },
+]
+eda = [
+    { name = "ipykernel", specifier = ">=7.4.0" },
+    { name = "matplotlib", specifier = ">=3.11.2" },
 ]
 
 [[package]]

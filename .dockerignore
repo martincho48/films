@@ -1,0 +1,7 @@
+# Only what the app image needs; everything else stays out
+*
+!pyproject.toml
+!uv.lock
+!.streamlit/
+!app/
+**/__pycache__
