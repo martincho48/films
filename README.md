@@ -1052,4 +1052,4 @@ gcloud run services add-iam-policy-binding films-app --region us-central1 --memb
 
 **Logy:** build a deploy v záložce Actions na GitHubu, běžící aplikace v GCP Console → Cloud Run → `films-app` → Logs.
 
-Ověřeno 2026-10-29: první běh workflow (commit `4ac4f68`) prošel napoprvé, `test` a `eval` přeskočené, `deploy` hotový. Služba `films-app` je `Ready`, běží pod `films-app@…`, 1 CPU, 1 GiB, max 1 instance, IAM politika služby je prázdná (neveřejná). Přes proxy aplikace odpověděla na dotaz z BigQuery i Gemini. Artifact Registry má po prvním buildu 312 MB (scraper + aplikace), v limitu 0,5 GB zdarma.
+Ověřeno 2026-10-29: první běh workflow (commit `4ac4f68`) prošel napoprvé, `test` a `eval` přeskočené, `deploy` hotový. Služba `films-app` je `Ready`, běží pod `films-app@…`, 1 CPU, 1 GiB, max 1 instance, IAM politika služby je prázdná (neveřejná). Přes proxy aplikace odpověděla na dotaz z BigQuery i Gemini. Artifact Registry má po prvním buildu 312 MB (scraper + aplikace), v limitu 0,5 GB zdarma. Druhý běh (commit `2f38e08`, `--provenance=false`) přidal do registru jedinou verzi místo tří a služba přešla na nový image.
