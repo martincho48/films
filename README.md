@@ -158,7 +158,9 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
   - [x] Úpravy UI: Film Agent, karty dotazů, ukázkové prompty, cena v CZK se součtem session, Clear history, patička s verzí a TMDB (krok 2.6)
   - [x] Budget `films-vertex` se spend capem na Vertex AI, 50 Kč měsíčně (krok 2.7)
   - [ ] Plakáty nalezených filmů (`poster_url` z `gold.movies`, TMDB velikost `w185`): nejdřív sloupec s obrázkem v tabulce (`column_config.ImageColumn`), později mřížka karet s přepínačem tabulka / plakáty. Náhradní obrázek pro filmy bez plakátu. Obrázky načítá prohlížeč přímo z TMDB, do modelu nejdou.
-- [ ] **Fáze III:** Dockerfile a lokální test v kontejneru
+- [ ] **Fáze III:** Dockerfile a nasazení aplikace na Cloud Run. Image staví GitHub Actions, lokální Docker se neinstaluje.
+  - [x] Service account `films-app` pro aplikaci: čtení `gold`, dotazy do BigQuery, Gemini (krok 3.2)
+  - [x] Service account `github-deployer` pro GitHub Actions: nasazení aplikace, testy a evaluace (krok 3.3)
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
 ## Analýza starého scrapingu (`old/`)
@@ -838,3 +840,96 @@ Nastaveno ručně v konzoli (Billing → Budgets & caps → Create budget), stej
 V projektu jsou teď dva budgety s capem: `films-cloud-run` (Cloud Run, 100 Kč) a `films-vertex` (Vertex AI, 50 Kč).
 
 Ověřeno 2026-10-27: budget v konzoli ukazoval útratu Vertex AI ≈ 0,42 Kč, což odpovídá součtu odhadů z aplikace a evaluací za den.
+
+### Krok 3.2 – Service account pro aplikaci
+
+Aplikace na Cloud Runu potřebuje číst BigQuery a volat Gemini. Nepřihlašuje se heslem ani klíčem, ale běží pod **service accountem** `films-app`. Lokálně běží pod tvým přihlášením (ADC, krok 2.2), na Cloud Runu pod `films-app`. Kód je stejný, knihovny si přihlášení najdou samy.
+
+**Tři pojmy:**
+
+| Pojem | Co to je | Přirovnání | U nás |
+|---|---|---|---|
+| **Service account** | identita pro program místo člověka | zaměstnanec | `films-app@films-512811.iam.gserviceaccount.com` |
+| **Role** | hotová sada oprávnění od Googlu | svazek klíčů | `bigquery.jobUser`, `aiplatform.user`, `bigquery.dataViewer` |
+| **Přiřazení (binding)** | tento účet má tuto roli na tomto místě | ke kterým dveřím klíče pasují | `jobUser` na celý projekt, `dataViewer` jen na dataset `gold` |
+
+Sám účet nesmí nic, práva mu dávají až přiřazené role.
+
+**Co `films-app` smí:**
+
+| Role | Kde | Co dovolí |
+|---|---|---|
+| BigQuery Job User (`roles/bigquery.jobUser`) | projekt | spustit dotaz. Sama nedovolí číst žádná data. |
+| BigQuery Data Viewer (`roles/bigquery.dataViewer`) | **jen dataset `gold`** | číst tabulky `gold.movies` a `gold.movie_snapshots` |
+| Agent Platform User (`roles/aiplatform.user`, dřív „Vertex AI User“) | projekt | volat Gemini přes Vertex AI |
+
+Pro dotaz z aplikace jsou potřeba dvě role současně: Job User dotaz spustí, Data Viewer dovolí přečíst data. **Nesmí:** `bronze` a `silver`, zápis a mazání v BigQuery, bucket se surovými daty, scraper ani jiné služby.
+
+**Jak se to nastavilo:**
+
+```bash
+gcloud iam service-accounts create films-app --project films-512811 --display-name "Films: Streamlit agent app (Cloud Run)"
+gcloud projects add-iam-policy-binding films-512811 --member "serviceAccount:films-app@films-512811.iam.gserviceaccount.com" --role roles/bigquery.jobUser --condition=None --format=none
+gcloud projects add-iam-policy-binding films-512811 --member "serviceAccount:films-app@films-512811.iam.gserviceaccount.com" --role roles/aiplatform.user --condition=None --format=none
+```
+
+Čtení `gold` v konzoli: BigQuery → `films-512811` → `gold` → ⋮ → **Share ▸ Manage permissions** → **Add principal** → `films-app@…` → role **BigQuery Data Viewer** → Save. Pozor, položka **Subscriptions** ve stejném menu je Analytics Hub (sdílení s jinými projekty), to sem nepatří.
+
+**Kde to v konzoli vidět:** role na projektu jsou v **IAM & Admin → IAM**. Role na datasetu tam **nejsou**, jsou jen v panelu Share u datasetu. Z příkazové řádky:
+
+```bash
+gcloud projects get-iam-policy films-512811 --flatten="bindings[].members" --filter="bindings.members:films-app@" --format="value(bindings.role)"
+bq show --format=prettyjson films-512811:gold    # sekce "access", role READER = Data Viewer
+```
+
+**Past v Git Bashi:** prefix `!` patří do promptu Claude Code (spustí příkaz v jeho session). V Git Bashi `!` otočí návratový kód, takže úspěšný příkaz vypadá jako chyba (červený křížek).
+
+Ověřeno 2026-10-29: na projektu má `films-app` role `aiplatform.user` a `bigquery.jobUser`, na datasetu `gold` roli `READER`. Účet se na Cloud Runu použije při nasazení aplikace (`--service-account`).
+
+### Krok 3.3 – Service account pro GitHub Actions
+
+Druhý účet, `github-deployer`, je identita, pod kterou GitHub Actions aplikaci **nasazují** a pouštějí testy. `films-app` je identita, pod kterou aplikace **běží**. Účty jsou oddělené: běžící aplikace nic nenasadí a nasazovací účet nemá víc práv, než potřebuje.
+
+Účet zatím nemá žádný klíč a s GitHubem není propojený, takže ho nikdo nemůže použít. Propojení bez klíčů (Workload Identity Federation) je další krok.
+
+**Kvůli nasazení:**
+
+| Role | Kde | Co dovolí |
+|---|---|---|
+| Artifact Registry Writer (`roles/artifactregistry.writer`) | jen repo `cloud-run-source-deploy` | nahrát nový image aplikace |
+| Cloud Run Developer (`roles/run.developer`) | projekt | vytvořit a aktualizovat službu na Cloud Run. **Nesmí měnit, kdo k ní má přístup**, takže workflow aplikaci nemůže zveřejnit. To by uměla až role `run.admin`. |
+| Service Account User (`roles/iam.serviceAccountUser`) | **jen účet `films-app`** | nasadit službu, která poběží jako `films-app` („jednat za něj“). Bez toho by deploy s `--service-account films-app` selhal. Za žádný jiný účet jednat nesmí. |
+
+**Kvůli testům a evaluaci** (`test_tools.py` a `eval_agent.py` v Actions):
+
+| Role | Kde | Co dovolí |
+|---|---|---|
+| BigQuery Job User (`roles/bigquery.jobUser`) | projekt | spustit dotaz |
+| BigQuery Data Viewer (`READER`) | jen dataset `gold` | číst data |
+| Agent Platform User (`roles/aiplatform.user`) | projekt | volat Gemini |
+
+Práva na scraper a SQL účet zatím nemá. Přibudou s workflow `deploy-scraper.yml` a `deploy-sql.yml`.
+
+**Jak se to nastavilo** (Git Bash):
+
+```bash
+gcloud iam service-accounts create github-deployer --project films-512811 --display-name "Films: GitHub Actions deploy (WIF)"
+gcloud artifacts repositories add-iam-policy-binding cloud-run-source-deploy --location us-central1 --project films-512811 --member "serviceAccount:github-deployer@films-512811.iam.gserviceaccount.com" --role roles/artifactregistry.writer --format=none
+gcloud projects add-iam-policy-binding films-512811 --member "serviceAccount:github-deployer@films-512811.iam.gserviceaccount.com" --role roles/run.developer --condition=None --format=none
+gcloud iam service-accounts add-iam-policy-binding films-app@films-512811.iam.gserviceaccount.com --project films-512811 --member "serviceAccount:github-deployer@films-512811.iam.gserviceaccount.com" --role roles/iam.serviceAccountUser --format=none
+gcloud projects add-iam-policy-binding films-512811 --member "serviceAccount:github-deployer@films-512811.iam.gserviceaccount.com" --role roles/bigquery.jobUser --condition=None --format=none
+gcloud projects add-iam-policy-binding films-512811 --member "serviceAccount:github-deployer@films-512811.iam.gserviceaccount.com" --role roles/aiplatform.user --condition=None --format=none
+```
+
+Čtení `gold` v konzoli stejně jako v kroku 3.2 (Share ▸ Manage permissions → BigQuery Data Viewer).
+
+**Kde jsou práva vidět:** role jsou na čtyřech různých místech, proto je stránka IAM projektu neukáže všechny.
+
+| Místo | Příkaz pro kontrolu |
+|---|---|
+| projekt | `gcloud projects get-iam-policy films-512811 --flatten="bindings[].members" --filter="bindings.members:github-deployer@" --format="value(bindings.role)"` |
+| repo v Artifact Registry | `gcloud artifacts repositories get-iam-policy cloud-run-source-deploy --location us-central1` |
+| účet `films-app` | `gcloud iam service-accounts get-iam-policy films-app@films-512811.iam.gserviceaccount.com` |
+| dataset `gold` | `bq show --format=prettyjson films-512811:gold` (sekce `access`) |
+
+Ověřeno 2026-10-29: všech sedm přiřazení je na svém místě (projekt: `run.developer`, `bigquery.jobUser`, `aiplatform.user`; repo: `artifactregistry.writer`; `films-app`: `iam.serviceAccountUser`; `gold`: `READER`).
