@@ -161,6 +161,7 @@ Země pro novinky (23): `US, GB, CA, AU, IE, NZ`, `CZ, SK`, `FR, DE, IT, ES, BE,
 - [ ] **Fáze III:** Dockerfile a nasazení aplikace na Cloud Run. Image staví GitHub Actions, lokální Docker se neinstaluje.
   - [x] Service account `films-app` pro aplikaci: čtení `gold`, dotazy do BigQuery, Gemini (krok 3.2)
   - [x] Service account `github-deployer` pro GitHub Actions: nasazení aplikace, testy a evaluace (krok 3.3)
+  - [x] Workload Identity Federation: přihlášení GitHub Actions do GCP bez klíčů, jen repo `martincho48/films` a větev `main` (krok 3.4)
 - [ ] **Fáze IV:** CI/CD přes GitHub Actions a nasazení na Cloud Run
 
 ## Analýza starého scrapingu (`old/`)
@@ -933,3 +934,33 @@ gcloud projects add-iam-policy-binding films-512811 --member "serviceAccount:git
 | dataset `gold` | `bq show --format=prettyjson films-512811:gold` (sekce `access`) |
 
 Ověřeno 2026-10-29: všech sedm přiřazení je na svém místě (projekt: `run.developer`, `bigquery.jobUser`, `aiplatform.user`; repo: `artifactregistry.writer`; `films-app`: `iam.serviceAccountUser`; `gold`: `READER`).
+
+### Krok 3.4 – Workload Identity Federation (GitHub → GCP bez klíčů)
+
+GitHub Actions se musí do GCP nějak přihlásit. Starý způsob je JSON klíč k service accountu uložený v GitHub Secrets: platí, dokud ho někdo ručně nezruší, a když unikne, má útočník přístup do projektu. **WIF** žádný trvalý klíč nepotřebuje:
+
+1. GitHub při každém běhu workflow vystaví podepsaný průkaz (OIDC token). Je v něm, z jakého repa a z jaké větve workflow běží.
+2. GCP ověří podpis a zkontroluje podmínku: repo `martincho48/films` **a** větev `main`.
+3. Když podmínka sedí, GCP vydá dočasný přístup jako `github-deployer`, platný zhruba hodinu.
+
+Přirovnání: JSON klíč je fyzický klíč od kanceláře na hřebíku, WIF je vrátnice, která ověří průkaz a vydá kartu na jeden den.
+
+| Část | Jméno | Co to je |
+|---|---|---|
+| API | `sts.googleapis.com` | služba, která vyměňuje průkaz z GitHubu za dočasný přístup do GCP. Zapnutí je zdarma. |
+| Pool | `github` | „vrátnice“, kontejner pro externí identity |
+| Provider | `github-films` | komu vrátnice věří (`https://token.actions.githubusercontent.com`) a za jaké podmínky |
+| Binding | `roles/iam.workloadIdentityUser` na `github-deployer` | kdo vrátnicí projde, smí jednat jako `github-deployer` |
+
+**Podmínka** (`attribute-condition`): `assertion.repository=='martincho48/films' && assertion.ref=='refs/heads/main'`. Workflow z jiného repa (i z forku) nebo z jiné větve neprojde. Proto na jiných větvích nepoběží ani testy proti BigQuery.
+
+```bash
+gcloud services enable sts.googleapis.com --project films-512811
+gcloud iam workload-identity-pools create github --project films-512811 --location global --display-name "GitHub Actions"
+gcloud iam workload-identity-pools providers create-oidc github-films --project films-512811 --location global --workload-identity-pool github --display-name "GitHub martincho48/films" --issuer-uri "https://token.actions.githubusercontent.com" --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" --attribute-condition "assertion.repository=='martincho48/films' && assertion.ref=='refs/heads/main'"
+gcloud iam service-accounts add-iam-policy-binding github-deployer@films-512811.iam.gserviceaccount.com --project films-512811 --role roles/iam.workloadIdentityUser --member "principalSet://iam.googleapis.com/projects/188138853287/locations/global/workloadIdentityPools/github/attribute.repository/martincho48/films" --format=none
+```
+
+`188138853287` je číslo projektu `films-512811` (vidět je i ve jménu výchozího compute účtu). Workflow potřebuje plné jméno provideru: `projects/188138853287/locations/global/workloadIdentityPools/github/providers/github-films`.
+
+Ověřeno 2026-10-29: API zapnuté, pool i provider ve stavu `ACTIVE` s podmínkou výše, binding na `github-deployer` existuje. Skutečné přihlášení z GitHubu ověří první běh workflow.
